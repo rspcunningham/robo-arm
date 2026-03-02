@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv sync:*)",
+      "Bash(pip3 index:*)",
+      "Bash(uv pip:*)",
+      "Bash(sudo apt:*)",
+      "Bash(uv run:*)",
+      "Bash(echo exit: $?:*)",
+      "Bash(sudo tee:*)",
+      "Bash(sudo systemctl:*)",
+      "Bash(sudo sed:*)",
+      "Bash(uv add:*)",
+      "Bash(rm:*)"
+    ]
+  }
+}

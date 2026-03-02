@@ -1,0 +1,13 @@
+[project]
+name = "code"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "esptool",
+    "pip>=26.0.1",
+    "platformio>=6.1.19",
+    "pyserial",
+    "RPi.GPIO",
+]
