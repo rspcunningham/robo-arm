@@ -61,11 +61,12 @@ class CamNode(Node):
         GPIO.setup(READY_PIN, GPIO.IN)
         GPIO.setup(RESET_PIN, GPIO.OUT, initial=GPIO.HIGH)
 
+        self._running = True
+        self._last_seq = 0
+
         self.spi = spidev.SpiDev()
         self._open_spi()
 
-        self._running = True
-        self._last_seq = 0
         self._thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._thread.start()
 
@@ -227,7 +228,14 @@ class CamNode(Node):
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.format = "jpeg"
             msg.data = frame
-            self.pub.publish(msg)
+            if not self._running or not rclpy.ok():
+                break
+            try:
+                self.pub.publish(msg)
+            except Exception:
+                if not self._running or not rclpy.ok():
+                    break
+                raise
 
     def destroy_node(self):
         self._running = False
