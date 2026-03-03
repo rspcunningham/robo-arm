@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "esptool",
+    "numpy>=2.4.2",
     "pip>=26.0.1",
     "platformio>=6.1.19",
     "pyserial",
@@ -25,5 +26,5 @@ packages = ["."]
 
 [project.scripts]
 esp = "esp:main"
-arm-node = "nodes.arm:main"
-cam-node = "nodes.cam:main"
+cmd = "nodes.cmd:main"
+launch-nodes = "nodes.launch:main"

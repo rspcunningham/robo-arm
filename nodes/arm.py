@@ -91,13 +91,14 @@ class ArmNode(Node):
         if len(msg.position) < 4:
             return
         base, shoulder, elbow, hand = msg.position[:4]
+        spd = msg.velocity[0] if msg.velocity else 0
         self._send({
             "T": 102,
             "base": -base,
             "shoulder": -shoulder,
             "elbow": elbow,
             "hand": math.pi - hand,
-            "spd": 0,
+            "spd": spd,
             "acc": 10,
         })
 

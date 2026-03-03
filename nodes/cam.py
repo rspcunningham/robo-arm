@@ -38,8 +38,10 @@ class CamNode(Node):
             CompressedImage, "/camera/image/compressed", 10,
         )
 
-        # Start streaming
+        # Configure and start streaming
         self.ser.reset_input_buffer()
+        self.ser.write(b"RESOLUTION VGA\n")
+        self.ser.write(b"QUALITY 20\n")
         self.ser.write(b"START\n")
 
         self._running = True
