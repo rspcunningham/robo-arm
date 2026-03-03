@@ -17,8 +17,8 @@
 // This removes the "request now, response later" turnaround race.
 
 #define SERIAL_BAUD      115200
-#define FRAME_WIDTH      FRAMESIZE_QVGA
-#define JPEG_QUALITY     12
+#define FRAME_WIDTH      FRAMESIZE_VGA
+#define JPEG_QUALITY     11
 
 #define CMD_NOP              0x00
 #define CMD_GET_HEADER       0x01
@@ -33,7 +33,7 @@
 
 #define REQUEST_LEN       8u
 #define RESPONSE_HDR_LEN  8u
-#define MAX_CHUNK_LEN     1024u
+#define MAX_CHUNK_LEN     4088u
 #define TRANSFER_LEN      (RESPONSE_HDR_LEN + MAX_CHUNK_LEN)
 #define FRAME_BUF_CAP     (192u * 1024u)
 
