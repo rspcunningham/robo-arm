@@ -1,0 +1,11 @@
+[project]
+name = "robo-arm-experiments"
+version = "0.1.0"
+description = "Mac-only experiments for the robo-arm repo"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false
+python-preference = "only-system"

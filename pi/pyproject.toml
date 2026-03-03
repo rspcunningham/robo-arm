@@ -1,22 +1,21 @@
 [project]
-name = "code"
+name = "robo-arm-pi"
 version = "0.1.0"
-description = "Add your description here"
+description = "Raspberry Pi runtime for the robo-arm project"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp",
+    "RPi.GPIO",
     "datasets>=4.0.0",
     "esptool",
     "huggingface_hub>=0.35.3",
     "numpy>=2.4.2",
     "pandas",
-    "pillow",
-    "pip>=26.0.1",
     "platformio>=6.1.19",
+    "pillow",
     "pyarrow",
     "pyserial",
-    "RPi.GPIO",
     "spidev",
 ]
 

@@ -4,7 +4,6 @@ import os
 import threading
 from pathlib import Path
 
-from huggingface_hub import create_repo, snapshot_download, upload_folder
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -21,6 +20,8 @@ def dataset_root(repo_id: str) -> Path:
 
 def pull_dataset(root: Path, repo_id: str, create_if_missing: bool = False, private: bool = True):
     """Pull the latest dataset files from HF into a local working copy."""
+    from huggingface_hub import create_repo, snapshot_download
+
     root.mkdir(parents=True, exist_ok=True)
     if create_if_missing:
         create_repo(repo_id=repo_id, repo_type="dataset", private=private, exist_ok=True)
@@ -34,6 +35,8 @@ def pull_dataset(root: Path, repo_id: str, create_if_missing: bool = False, priv
 
 def push_dataset(root: Path, repo_id: str, private: bool = True, commit_message: str | None = None):
     """Push the local dataset working copy to HF."""
+    from huggingface_hub import create_repo, upload_folder
+
     create_repo(repo_id=repo_id, repo_type="dataset", private=private, exist_ok=True)
     upload_folder(
         repo_id=repo_id,

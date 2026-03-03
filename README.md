@@ -1,49 +1,72 @@
-# Quickstart
+# Robo Arm
 
-1. Install Ubuntu Server 24.04 to an SD card using the Raspberry Pi imager. Ensure you give yourself ssh access and an internet connection. 
-2. Boot up the pi. 
-3. SSH in to the pi and run the below commands one at a time:
+This repo now contains sibling projects:
+
+- `pi/`: the Raspberry Pi runtime project
+- `experiments/`: the Mac-only project for local experiments
+
+Use the repo root as the shared container for source control, docs, and deploy helpers.
+
+## Pi runtime
+
+The current robot runtime lives in [pi/](/Users/robin/Desktop/robo-arm/pi).
+
+Install or update it on the Pi:
 
 ```bash
-sudo apt update
-sudo apt upgrade -y
-sudo apt install -y curl git htop
-sudo apt install -y gh
-gh auth login # and follow the prompts to sign in
-curl -LsSf https://astral.sh/uv/install.sh | sh
-curl -fsSL https://cli.anthropic.com/install.sh | sh
-source ~/.bashrc
+cd pi
+uv sync
 ```
 
-Then, run `claude` in the root dir to launch claude code and sign in
+The runtime script will use `ROS_SETUP_BASH` if you set it. Otherwise it checks `ROS_DISTRO`, then auto-discovers `/opt/ros/*/setup.bash`.
 
-For esp32 camera use, run the following prompt: 
+Run it manually on the Pi:
 
-```markdown
-You are running on a raspberry pi running ubuntu server 24
-
-Tasks:
-1. use the gh cli to clone rspcunningham/robo-arm to a dir named 'code'
-2. set up ros2
-3. enable UART over the raspberry pi's gpio pins
-4. verify that the esp compiling/flashing toolchain in the cloned source works with the 'uv run esp check' cli command
-5. flash the 'esp-camera' code to the esp32 connected over uart
-6. check that the robot arm is available as a usb serial device, reference './docs' in the cloned repo
-7. ensure the camera and arm work as ros2 nodes with 'uv run launch-nodes' in the cloned repo
-
-ultimate goal is vla operation. 
+```bash
+cd pi
+./scripts/run_pi_stack.sh
 ```
 
-If using without the camera, run: 
+Install it as a service on the Pi:
 
-```markdown
-You are running on a raspberry pi running ubuntu server 24
-
-Tasks:
-1. use the gh cli to clone rspcunningham/robo-arm to a dir named 'code'
-2. set up ros2
-3. check that the robot arm is available as a usb serial device, reference './docs' in the cloned repo
-4. ensure the arm works as a ros2 nodes with 'uv run launch-nodes' in the cloned repo -- note that this expects the cam node to be available, but it isnt. I'm not sure how to handle that. 
-
-ultimate goal is vla operation. 
+```bash
+cd pi
+./scripts/install_pi_service.sh
 ```
+
+## Mac experiments
+
+Use [experiments/](/Users/robin/Desktop/robo-arm/experiments) for Mac-only dependencies and scripts.
+
+```bash
+cd experiments
+uv sync
+```
+
+If a dependency should never land on the Pi, add it in `experiments/`, not in `pi/`.
+
+## Deploy from the Mac
+
+From the repo root:
+
+```bash
+./scripts/deploy_pi.sh
+```
+
+This syncs the repo to the Pi, runs `uv sync --project pi --frozen`, and restarts `robo-arm.service` if installed.
+
+Defaults:
+
+- `PI_HOST=pi@pi1.local`
+- `PI_DIR=/home/pi/robo-arm`
+
+Override them inline when needed:
+
+```bash
+PI_HOST=pi@192.168.1.50 PI_DIR=/home/pi/code ./scripts/deploy_pi.sh
+```
+
+## Notes
+
+- The layout and workflow are described in [docs/mac-pi-dev-workflow.md](/Users/robin/Desktop/robo-arm/docs/mac-pi-dev-workflow.md).
+- The older plan in [docs/roarm-m2s-ros2-vla-project-plan.md](/Users/robin/Desktop/robo-arm/docs/roarm-m2s-ros2-vla-project-plan.md) still reflects the pre-split layout.
