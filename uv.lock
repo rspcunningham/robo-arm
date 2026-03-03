@@ -384,6 +384,7 @@ name = "code"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "datasets" },
     { name = "esptool" },
     { name = "numpy" },
@@ -398,6 +399,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp" },
     { name = "datasets", specifier = ">=4.0.0" },
     { name = "esptool" },
     { name = "numpy", specifier = ">=2.4.2" },

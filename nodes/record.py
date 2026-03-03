@@ -30,6 +30,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage, JointState
 from std_srvs.srv import SetBool
 
+from nodes._util import JOINT_NAMES, dataset_root, spin_in_background, shutdown_and_exit
+
 CODEBASE_VERSION = "v3.0"
 LEROBOT_FEATURES = {
     "observation.images.front": {
@@ -40,12 +42,12 @@ LEROBOT_FEATURES = {
     "observation.state": {
         "dtype": "float32",
         "shape": [4],
-        "names": ["base", "shoulder", "elbow", "hand"],
+        "names": JOINT_NAMES,
     },
     "action": {
         "dtype": "float32",
         "shape": [4],
-        "names": ["base", "shoulder", "elbow", "hand"],
+        "names": JOINT_NAMES,
     },
 }
 
@@ -66,11 +68,6 @@ def get_hf_features():
             length=4, feature=datasets.Value("float32"),
         ),
     })
-
-
-def dataset_root(repo_id: str) -> Path:
-    """Resolve repo_id to a local path under ~/.cache/huggingface/lerobot/."""
-    return Path.home() / ".cache" / "huggingface" / "lerobot" / repo_id
 
 
 def create_dataset(root: Path, fps: int) -> dict:
@@ -239,14 +236,7 @@ def main():
 
     rclpy.init()
     node = RecordNode()
-    def _spin(node):
-        try:
-            rclpy.spin(node)
-        except rclpy.executors.ExternalShutdownException:
-            pass
-
-    spin_thread = threading.Thread(target=_spin, args=(node,), daemon=True)
-    spin_thread.start()
+    spin_in_background(node)
 
     # Wait for arm + camera
     print("Waiting for arm...", end="", flush=True)
@@ -276,36 +266,43 @@ def main():
         print(f"Created new dataset: {args.repo_id}")
 
     interval = 1.0 / args.fps
+    stop_flag = threading.Event()
+
+    def _wait_enter():
+        """Block until Enter is pressed, then set stop_flag."""
+        input()
+        stop_flag.set()
+
     episode = 0
     try:
         while episode < args.num_episodes:
             input(f"\nPress Enter to start episode {info['total_episodes']} "
                   f"({episode + 1}/{args.num_episodes})...")
             frame_buf = []
-            print(f"Recording at {args.fps} fps. Ctrl+C to end episode.")
-            try:
-                while True:
-                    t0 = time.time()
+            stop_flag.clear()
+            enter_thread = threading.Thread(target=_wait_enter, daemon=True)
+            enter_thread.start()
+            print(f"Recording at {args.fps} fps. Press Enter to stop.")
+            while not stop_flag.is_set():
+                t0 = time.time()
 
-                    js = node._last_joints
-                    img_msg = node._last_frame
-                    if js is None or img_msg is None or len(js.position) < 4:
-                        elapsed = time.time() - t0
-                        if elapsed < interval:
-                            time.sleep(interval - elapsed)
-                        continue
-
-                    frame_buf.append({
-                        "state": list(js.position[:4]),
-                        "jpeg": bytes(img_msg.data),
-                    })
-                    print(f"\r  frame {len(frame_buf)}", end="", flush=True)
-
+                js = node._last_joints
+                img_msg = node._last_frame
+                if js is None or img_msg is None or len(js.position) < 4:
                     elapsed = time.time() - t0
                     if elapsed < interval:
                         time.sleep(interval - elapsed)
-            except KeyboardInterrupt:
-                pass
+                    continue
+
+                frame_buf.append({
+                    "state": list(js.position[:4]),
+                    "jpeg": bytes(img_msg.data),
+                })
+                print(f"\r  frame {len(frame_buf)}", end="", flush=True)
+
+                elapsed = time.time() - t0
+                if elapsed < interval:
+                    time.sleep(interval - elapsed)
 
             if not frame_buf:
                 print("\nNo frames recorded, skipping episode.")
@@ -321,11 +318,7 @@ def main():
 
     print(f"Dataset: {root} ({info['total_episodes']} episodes, {info['total_frames']} frames)")
 
-    node.destroy_node()
-    try:
-        rclpy.shutdown()
-    except Exception:
-        pass
+    shutdown_and_exit(node)
 
 
 if __name__ == "__main__":

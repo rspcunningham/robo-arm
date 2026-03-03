@@ -7,22 +7,13 @@ from pathlib import Path
 
 NODES_DIR = Path(__file__).parent
 
-
-SPIN_MARKER = "rclpy" + ".spin(node)"
-
-
-def is_node(path: Path) -> bool:
-    """A node file spins a rclpy node as its main loop."""
-    return SPIN_MARKER in path.read_text()
+# Background nodes that should always be running.
+# Ephemeral tools (cmd, record, replay, snap) are run separately.
+BACKGROUND_NODES = ["arm", "cam"]
 
 
 def main():
-    nodes = []
-    for f in sorted(NODES_DIR.glob("*.py")):
-        if f.name.startswith("_"):
-            continue
-        if is_node(f):
-            nodes.append(f.stem)
+    nodes = [n for n in BACKGROUND_NODES if (NODES_DIR / f"{n}.py").exists()]
 
     if not nodes:
         print("No nodes found")

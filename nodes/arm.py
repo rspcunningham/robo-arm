@@ -13,7 +13,7 @@ from sensor_msgs.msg import JointState
 from std_srvs.srv import SetBool, Trigger
 import serial
 
-JOINT_NAMES = ["base", "shoulder", "elbow", "hand"]
+from nodes._util import JOINT_NAMES, run_node
 
 
 class ArmNode(Node):
@@ -124,11 +124,4 @@ class ArmNode(Node):
 
 def main():
     rclpy.init()
-    node = ArmNode()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    run_node(ArmNode())

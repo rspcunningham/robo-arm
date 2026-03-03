@@ -11,13 +11,14 @@ Usage:
 """
 
 import readline  # noqa: F401 — enables arrow keys / history in input()
-import threading
 import time
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage, JointState
 from std_srvs.srv import SetBool, Trigger
+
+from nodes._util import ArmCommander, spin_in_background
 
 HELP = """\
 Commands:
@@ -31,7 +32,7 @@ Commands:
   quit / Ctrl+C"""
 
 
-class CmdNode(Node):
+class CmdNode(ArmCommander, Node):
     def __init__(self):
         super().__init__("cmd")
         # Arm
@@ -55,25 +56,12 @@ class CmdNode(Node):
     def _on_image(self, msg: CompressedImage):
         self._last_frame = msg
 
-    def emergency_stop(self):
-        if self.estop_cli.wait_for_service(timeout_sec=1.0):
-            self.estop_cli.call_async(Trigger.Request())
-
-    def publish_move(self, pos: list[float], spd: float | None = None):
-        msg = JointState()
-        msg.name = ["base", "shoulder", "elbow", "hand"]
-        msg.position = pos
-        if spd is not None:
-            msg.velocity = [spd]
-        self.arm_pub.publish(msg)
-
 
 def main():
     rclpy.init()
     node = CmdNode()
 
-    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
-    spin_thread.start()
+    spin_in_background(node)
 
     print("Connecting...", end="", flush=True)
     while node.arm_pub.get_subscription_count() == 0:

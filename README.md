@@ -36,7 +36,7 @@ ultimate goal is vla operation.
 
 If using without the camera, run: 
 
-```'markdown
+```markdown
 You are running on a raspberry pi running ubuntu server 24
 
 Tasks:
@@ -46,4 +46,4 @@ Tasks:
 4. ensure the arm works as a ros2 nodes with 'uv run launch-nodes' in the cloned repo -- note that this expects the cam node to be available, but it isnt. I'm not sure how to handle that. 
 
 ultimate goal is vla operation. 
-'''
+```

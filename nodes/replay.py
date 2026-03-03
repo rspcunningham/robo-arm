@@ -9,9 +9,7 @@ Uses daemon-thread spin so launch.py does NOT auto-detect this as a node.
 
 import argparse
 import json
-import threading
 import time
-from pathlib import Path
 
 import pyarrow.parquet as pq
 import rclpy
@@ -19,26 +17,14 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
 
-
-def dataset_root(repo_id: str) -> Path:
-    return Path.home() / ".cache" / "huggingface" / "lerobot" / repo_id
+from nodes._util import ArmCommander, dataset_root, spin_in_background, shutdown_and_exit
 
 
-class ReplayNode(Node):
+class ReplayNode(ArmCommander, Node):
     def __init__(self):
         super().__init__("replay")
         self.arm_pub = self.create_publisher(JointState, "/joint_commands", 10)
         self.estop_cli = self.create_client(Trigger, "/emergency_stop")
-
-    def publish_move(self, pos: list[float]):
-        msg = JointState()
-        msg.name = ["base", "shoulder", "elbow", "hand"]
-        msg.position = pos
-        self.arm_pub.publish(msg)
-
-    def emergency_stop(self):
-        if self.estop_cli.wait_for_service(timeout_sec=1.0):
-            self.estop_cli.call_async(Trigger.Request())
 
 
 def main():
@@ -65,8 +51,7 @@ def main():
 
     rclpy.init()
     node = ReplayNode()
-    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
-    spin_thread.start()
+    spin_in_background(node)
 
     print("Connecting...", end="", flush=True)
     while node.arm_pub.get_subscription_count() == 0:
@@ -90,8 +75,7 @@ def main():
         node.emergency_stop()
         print("\nAborted — emergency stop sent")
 
-    node.destroy_node()
-    rclpy.shutdown()
+    shutdown_and_exit(node)
 
 
 if __name__ == "__main__":

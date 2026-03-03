@@ -13,6 +13,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
 import serial
 
+from nodes._util import run_node
+
 MAGIC = b"\xaa\x55\x01\x00"
 
 
@@ -125,11 +127,4 @@ class CamNode(Node):
 
 def main():
     rclpy.init()
-    node = CamNode()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    run_node(CamNode())

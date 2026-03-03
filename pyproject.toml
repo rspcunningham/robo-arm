@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiohttp",
     "datasets>=4.0.0",
     "esptool",
     "numpy>=2.4.2",
@@ -34,3 +35,4 @@ cmd = "nodes.cmd:main"
 launch-nodes = "nodes.launch:main"
 record = "nodes.record:main"
 replay = "nodes.replay:main"
+monitor = "nodes.monitor:main"
