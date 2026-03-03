@@ -3,7 +3,7 @@ name = "code"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "esptool",
     "pip>=26.0.1",
@@ -14,6 +14,7 @@ dependencies = [
 
 [tool.uv]
 package = true
+python-preference = "only-system"
 
 [build-system]
 requires = ["hatchling"]
@@ -24,3 +25,5 @@ packages = ["."]
 
 [project.scripts]
 esp = "esp:main"
+arm-node = "nodes.arm:main"
+cam-node = "nodes.cam:main"
