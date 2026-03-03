@@ -21,3 +21,10 @@
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
+
+// SPI transport pins (Pi SPI0 + READY handshake)
+#define SPI_SCLK_GPIO_NUM   14
+#define SPI_MISO_GPIO_NUM   12
+#define SPI_MOSI_GPIO_NUM   13
+#define SPI_CS_GPIO_NUM     15
+#define SPI_READY_GPIO_NUM  33

@@ -1,37 +1,68 @@
 #include <Arduino.h>
+#include <cstring>
+
 #include "esp_camera.h"
 #include "camera_pins.h"
+#include "driver/gpio.h"
+#include "driver/spi_slave.h"
+#include "esp_heap_caps.h"
+#include "esp_rom_crc.h"
 
-// --- Configuration ---
-#define SERIAL_BAUD    2000000
-#define FRAME_WIDTH    FRAMESIZE_QVGA  // 320x240 — good balance for UART
-#define JPEG_QUALITY   12              // 10-63, lower = better quality, bigger file
+// Camera defaults tuned for stable transfer over the new SPI transport.
+#define SERIAL_BAUD      115200
+#define FRAME_WIDTH      FRAMESIZE_QVGA
+#define JPEG_QUALITY     12
 
-// --- Framing protocol ---
-// Each frame sent as:
-//   [MAGIC 4B] [LENGTH 4B little-endian] [JPEG data] [CRC16 2B]
-//
-// MAGIC: 0xAA 0x55 0x01 0x00
-// LENGTH: byte count of JPEG data only
-// CRC16: CCITT over the JPEG data
-static const uint8_t FRAME_MAGIC[] = {0xAA, 0x55, 0x01, 0x00};
+#define CMD_GET_HEADER        0x01
+#define CMD_GET_FRAME_CHUNK   0x02
+#define CMD_GET_STATUS        0x03
 
-// Simple CRC-16/CCITT
-static uint16_t crc16(const uint8_t *data, size_t len) {
-    uint16_t crc = 0xFFFF;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= (uint16_t)data[i] << 8;
-        for (int j = 0; j < 8; j++) {
-            if (crc & 0x8000)
-                crc = (crc << 1) ^ 0x1021;
-            else
-                crc <<= 1;
-        }
-    }
-    return crc;
-}
+#define PROTOCOL_MAGIC  0x314D4143u  // "CAM1"
+#define STATUS_MAGIC    0x54415453u  // "STAT"
+#define PROTOCOL_VER    1u
+#define REQUEST_LEN     8u
+#define HEADER_LEN      20u
+#define STATUS_LEN      16u
+#define MAX_CHUNK_LEN   4096u
+#define FRAME_FLAGS_READY 0x0001u
 
-static bool streaming = false;
+struct RequestPacket {
+    uint8_t cmd;
+    uint8_t reserved;
+    uint16_t length;
+    uint32_t offset;
+};
+
+struct FrameHeader {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t flags;
+    uint32_t seq;
+    uint32_t length;
+    uint32_t crc32;
+};
+
+struct StatusPacket {
+    uint32_t magic;
+    uint32_t seq;
+    uint32_t frames_captured;
+    uint32_t frames_served;
+};
+
+static uint8_t *frame_buf = nullptr;
+static size_t frame_buf_cap = 0;
+static size_t latest_len = 0;
+static uint32_t latest_crc32 = 0;
+static uint32_t latest_seq = 0;
+static bool frame_ready = false;
+
+static uint32_t frames_captured = 0;
+static uint32_t frames_served = 0;
+
+static uint8_t *spi_tx_buf = nullptr;
+static uint8_t *spi_rx_buf = nullptr;
+static uint8_t *chunk_buf = nullptr;
+static bool spi_ok = false;
 
 static bool init_camera() {
     camera_config_t config;
@@ -57,14 +88,12 @@ static bool init_camera() {
     config.pixel_format = PIXFORMAT_JPEG;
     config.grab_mode    = CAMERA_GRAB_LATEST;
 
-    // Use PSRAM for frame buffers (WROVER has 4MB PSRAM)
     if (psramFound()) {
         config.frame_size   = FRAME_WIDTH;
         config.jpeg_quality = JPEG_QUALITY;
-        config.fb_count     = 2;  // double-buffer for smooth capture
+        config.fb_count     = 2;
         config.fb_location  = CAMERA_FB_IN_PSRAM;
     } else {
-        // Fallback without PSRAM — smaller frames
         config.frame_size   = FRAMESIZE_QVGA;
         config.jpeg_quality = 16;
         config.fb_count     = 1;
@@ -79,97 +108,222 @@ static bool init_camera() {
     return true;
 }
 
-static void send_frame() {
+static bool ensure_frame_capacity(size_t need) {
+    if (need <= frame_buf_cap) {
+        return true;
+    }
+
+    uint8_t *next = static_cast<uint8_t *>(
+        heap_caps_realloc(frame_buf, need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+    );
+    if (!next) {
+        Serial.printf("ERR:frame_alloc=%u\n", static_cast<unsigned>(need));
+        return false;
+    }
+
+    frame_buf = next;
+    frame_buf_cap = need;
+    return true;
+}
+
+static bool init_spi() {
+    pinMode(SPI_READY_GPIO_NUM, OUTPUT);
+    digitalWrite(SPI_READY_GPIO_NUM, LOW);
+
+    spi_bus_config_t buscfg = {};
+    buscfg.mosi_io_num = SPI_MOSI_GPIO_NUM;
+    buscfg.miso_io_num = SPI_MISO_GPIO_NUM;
+    buscfg.sclk_io_num = SPI_SCLK_GPIO_NUM;
+    buscfg.quadwp_io_num = -1;
+    buscfg.quadhd_io_num = -1;
+    buscfg.max_transfer_sz = MAX_CHUNK_LEN;
+
+    spi_slave_interface_config_t slvcfg = {};
+    slvcfg.mode = 0;
+    slvcfg.spics_io_num = SPI_CS_GPIO_NUM;
+    slvcfg.queue_size = 1;
+    slvcfg.flags = 0;
+
+    esp_err_t err = spi_slave_initialize(HSPI_HOST, &buscfg, &slvcfg, SPI_DMA_CH_AUTO);
+    if (err != ESP_OK) {
+        Serial.printf("SPI init failed: 0x%x\n", err);
+        return false;
+    }
+
+    spi_tx_buf = static_cast<uint8_t *>(heap_caps_malloc(MAX_CHUNK_LEN, MALLOC_CAP_DMA));
+    spi_rx_buf = static_cast<uint8_t *>(heap_caps_malloc(MAX_CHUNK_LEN, MALLOC_CAP_DMA));
+    chunk_buf = static_cast<uint8_t *>(heap_caps_malloc(MAX_CHUNK_LEN, MALLOC_CAP_DMA));
+    if (!spi_tx_buf || !spi_rx_buf || !chunk_buf) {
+        Serial.println("SPI DMA buffer alloc failed");
+        return false;
+    }
+
+    spi_ok = true;
+    return true;
+}
+
+static bool spi_exchange(size_t tx_len, size_t rx_len) {
+    if (!spi_ok) {
+        return false;
+    }
+
+    const size_t nbytes = tx_len > rx_len ? tx_len : rx_len;
+    if (nbytes == 0 || nbytes > MAX_CHUNK_LEN) {
+        return false;
+    }
+
+    memset(spi_rx_buf, 0, nbytes);
+
+    spi_slave_transaction_t trans = {};
+    trans.length = nbytes * 8;
+    trans.tx_buffer = spi_tx_buf;
+    trans.rx_buffer = spi_rx_buf;
+
+    esp_err_t err = spi_slave_transmit(HSPI_HOST, &trans, pdMS_TO_TICKS(20));
+    return err == ESP_OK;
+}
+
+static bool receive_request(RequestPacket *out) {
+    memset(spi_tx_buf, 0, REQUEST_LEN);
+    if (!spi_exchange(REQUEST_LEN, REQUEST_LEN)) {
+        return false;
+    }
+
+    memcpy(out, spi_rx_buf, REQUEST_LEN);
+    return true;
+}
+
+static bool send_bytes(const uint8_t *data, size_t len) {
+    if (len > MAX_CHUNK_LEN) {
+        return false;
+    }
+
+    memset(spi_tx_buf, 0, len);
+    memcpy(spi_tx_buf, data, len);
+    return spi_exchange(len, len);
+}
+
+static void publish_ready(bool ready) {
+    frame_ready = ready;
+    digitalWrite(SPI_READY_GPIO_NUM, ready ? HIGH : LOW);
+}
+
+static void capture_latest_frame() {
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
-        Serial.println("ERR:capture_failed");
         return;
     }
 
-    uint32_t len = fb->len;
-    uint16_t crc = crc16(fb->buf, len);
+    if (!ensure_frame_capacity(fb->len)) {
+        esp_camera_fb_return(fb);
+        return;
+    }
 
-    // Write header
-    Serial.write(FRAME_MAGIC, sizeof(FRAME_MAGIC));
-    Serial.write((uint8_t *)&len, 4);
-
-    // Write JPEG payload
-    Serial.write(fb->buf, len);
-
-    // Write CRC
-    Serial.write((uint8_t *)&crc, 2);
+    memcpy(frame_buf, fb->buf, fb->len);
+    latest_len = fb->len;
+    latest_crc32 = esp_rom_crc32_le(0, frame_buf, latest_len);
+    latest_seq += 1;
+    frames_captured += 1;
+    publish_ready(true);
 
     esp_camera_fb_return(fb);
 }
 
-static void handle_command(const String &cmd) {
-    if (cmd == "START") {
-        streaming = true;
-        Serial.println("OK:streaming");
-    } else if (cmd == "STOP") {
-        streaming = false;
-        Serial.println("OK:stopped");
-    } else if (cmd == "SNAP") {
-        // Single frame capture regardless of streaming state
-        send_frame();
-    } else if (cmd == "STATUS") {
-        Serial.printf("OK:streaming=%d,psram=%d,psram_free=%u\n",
-                       streaming, psramFound(),
-                       psramFound() ? ESP.getFreePsram() : 0);
-    } else if (cmd.startsWith("QUALITY ")) {
-        int q = cmd.substring(8).toInt();
-        if (q >= 10 && q <= 63) {
-            sensor_t *s = esp_camera_sensor_get();
-            s->set_quality(s, q);
-            Serial.printf("OK:quality=%d\n", q);
-        } else {
-            Serial.println("ERR:quality_range_10-63");
+static void handle_get_header() {
+    FrameHeader header = {};
+    header.magic = PROTOCOL_MAGIC;
+    header.version = PROTOCOL_VER;
+    header.flags = frame_ready ? FRAME_FLAGS_READY : 0;
+    header.seq = latest_seq;
+    header.length = latest_len;
+    header.crc32 = latest_crc32;
+    send_bytes(reinterpret_cast<const uint8_t *>(&header), sizeof(header));
+}
+
+static void handle_get_frame_chunk(uint32_t offset, uint16_t length) {
+    if (length > MAX_CHUNK_LEN) {
+        length = MAX_CHUNK_LEN;
+    }
+
+    if (offset >= latest_len || length == 0) {
+        memset(chunk_buf, 0, length);
+        send_bytes(chunk_buf, length);
+        return;
+    }
+
+    size_t available = latest_len - offset;
+    size_t send_len = length;
+    if (send_len > available) {
+        send_len = available;
+    }
+
+    memcpy(chunk_buf, frame_buf + offset, send_len);
+    if (send_len < length) {
+        memset(chunk_buf + send_len, 0, length - send_len);
+    }
+
+    if (send_bytes(chunk_buf, length)) {
+        frames_served += 1;
+        if (offset + send_len >= latest_len) {
+            publish_ready(false);
         }
-    } else if (cmd.startsWith("RESOLUTION ")) {
-        String res = cmd.substring(11);
-        framesize_t fs;
-        if      (res == "QQVGA")  fs = FRAMESIZE_QQVGA;  // 160x120
-        else if (res == "QVGA")   fs = FRAMESIZE_QVGA;   // 320x240
-        else if (res == "CIF")    fs = FRAMESIZE_CIF;     // 400x296
-        else if (res == "VGA")    fs = FRAMESIZE_VGA;     // 640x480
-        else if (res == "SVGA")   fs = FRAMESIZE_SVGA;    // 800x600
-        else {
-            Serial.println("ERR:unknown_resolution");
-            return;
-        }
-        sensor_t *s = esp_camera_sensor_get();
-        s->set_framesize(s, fs);
-        Serial.printf("OK:resolution=%s\n", res.c_str());
-    } else {
-        Serial.println("ERR:unknown_command");
+    }
+}
+
+static void handle_get_status() {
+    StatusPacket status = {};
+    status.magic = STATUS_MAGIC;
+    status.seq = latest_seq;
+    status.frames_captured = frames_captured;
+    status.frames_served = frames_served;
+    send_bytes(reinterpret_cast<const uint8_t *>(&status), sizeof(status));
+}
+
+static void handle_request(const RequestPacket &req) {
+    switch (req.cmd) {
+        case CMD_GET_HEADER:
+            handle_get_header();
+            break;
+        case CMD_GET_FRAME_CHUNK:
+            handle_get_frame_chunk(req.offset, req.length);
+            break;
+        case CMD_GET_STATUS:
+            handle_get_status();
+            break;
+        default:
+            memset(chunk_buf, 0, 4);
+            send_bytes(chunk_buf, 4);
+            break;
     }
 }
 
 void setup() {
     Serial.begin(SERIAL_BAUD);
-
+    delay(200);
     Serial.println("ESP32-CAM booting...");
 
     if (!init_camera()) {
         Serial.println("ERR:camera_init_failed");
-        while (true) delay(1000);
+        while (true) {
+            delay(1000);
+        }
+    }
+
+    if (!init_spi()) {
+        Serial.println("ERR:spi_init_failed");
+        while (true) {
+            delay(1000);
+        }
     }
 
     Serial.println("OK:ready");
 }
 
 void loop() {
-    // Check for serial commands
-    if (Serial.available()) {
-        String cmd = Serial.readStringUntil('\n');
-        cmd.trim();
-        if (cmd.length() > 0) {
-            handle_command(cmd);
-        }
-    }
+    capture_latest_frame();
 
-    // Stream frames if active
-    if (streaming) {
-        send_frame();
+    RequestPacket req = {};
+    if (receive_request(&req)) {
+        handle_request(req);
     }
 }

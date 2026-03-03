@@ -21,11 +21,12 @@ def run_node(node: Node):
     """Spin forever, handle KeyboardInterrupt, cleanup. For background nodes."""
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 def spin_in_background(node: Node):

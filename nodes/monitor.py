@@ -10,12 +10,11 @@ Usage:
 import argparse
 import asyncio
 import json
-import math
-import time
 
 import rclpy
 from aiohttp import web
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import CompressedImage, JointState
 
 from nodes._util import JOINT_NAMES, spin_in_background
@@ -43,7 +42,7 @@ HTML_PAGE = """\
 </head>
 <body>
 <h1>Robot Monitor</h1>
-<img id="cam" src="/stream" alt="camera">
+<img id="cam" alt="camera">
 <div class="section">Joint Positions (rad)</div>
 <table id="pos-table">
   <tr><th class="label">Joint</th><th>Position</th><th>Degrees</th></tr>
@@ -66,6 +65,30 @@ JOINTS.forEach(name => {
   r = effTable.insertRow();
   r.innerHTML = `<td class="label">${name}</td><td id="eff-${name}">—</td>`;
 });
+
+// Pull-based video: browser requests next frame only when current one is rendered
+const cam = document.getElementById('cam');
+let prevUrl = null;
+async function streamVideo() {
+  while (true) {
+    try {
+      const r = await fetch('/snapshot');
+      if (!r.ok) { await new Promise(r => setTimeout(r, 200)); continue; }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      if (prevUrl) URL.revokeObjectURL(prevUrl);
+      prevUrl = url;
+      await new Promise((resolve, reject) => {
+        cam.onload = resolve;
+        cam.onerror = reject;
+        cam.src = url;
+      });
+    } catch(e) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+}
+streamVideo();
 
 const es = new EventSource('/events');
 let lastEvent = 0;
@@ -93,13 +116,20 @@ setInterval(() => {
 
 
 class MonitorNode(Node):
-    def __init__(self):
+    def __init__(self, loop: asyncio.AbstractEventLoop):
         super().__init__("monitor")
+        self._loop = loop
+        self.joints_event = asyncio.Event()
         self.last_jpeg: bytes | None = None
         self.last_joints: dict | None = None
 
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
         self.create_subscription(
-            CompressedImage, "/camera/image/compressed", self._on_image, 10,
+            CompressedImage, "/camera/image/compressed", self._on_image, sensor_qos,
         )
         self.create_subscription(
             JointState, "/joint_states", self._on_joints, 10,
@@ -114,32 +144,19 @@ class MonitorNode(Node):
             "position": list(msg.position),
             "effort": list(msg.effort),
         }
+        self._loop.call_soon_threadsafe(self.joints_event.set)
 
 
 async def handle_index(request):
     return web.Response(text=HTML_PAGE, content_type="text/html")
 
 
-async def handle_stream(request):
+async def handle_snapshot(request):
     node = request.app["node"]
-    resp = web.StreamResponse()
-    resp.content_type = "multipart/x-mixed-replace; boundary=frame"
-    await resp.prepare(request)
-
-    try:
-        while True:
-            jpeg = node.last_jpeg
-            if jpeg is not None:
-                await resp.write(
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n"
-                    + jpeg
-                    + b"\r\n"
-                )
-            await asyncio.sleep(0.1)
-    except (ConnectionResetError, asyncio.CancelledError):
-        pass
-    return resp
+    jpeg = node.last_jpeg
+    if jpeg is None:
+        return web.Response(status=503, text="No frame yet")
+    return web.Response(body=jpeg, content_type="image/jpeg")
 
 
 async def handle_events(request):
@@ -152,14 +169,32 @@ async def handle_events(request):
 
     try:
         while True:
+            await node.joints_event.wait()
+            node.joints_event.clear()
             joints = node.last_joints
             if joints is not None:
                 payload = f"data: {json.dumps(joints)}\n\n"
                 await resp.write(payload.encode())
-            await asyncio.sleep(0.1)
     except (ConnectionResetError, asyncio.CancelledError):
         pass
     return resp
+
+
+async def _start_ros(app):
+    loop = asyncio.get_running_loop()
+    rclpy.init()
+    node = MonitorNode(loop)
+    spin_in_background(node)
+    app["node"] = node
+    node.get_logger().info("Monitor node ready")
+
+
+async def _stop_ros(app):
+    app["node"].destroy_node()
+    try:
+        rclpy.shutdown()
+    except Exception:
+        pass
 
 
 def main():
@@ -167,24 +202,11 @@ def main():
     parser.add_argument("--port", type=int, default=8080, help="HTTP port (default: 8080)")
     args = parser.parse_args()
 
-    rclpy.init()
-    node = MonitorNode()
-    spin_in_background(node)
-
     app = web.Application()
-    app["node"] = node
+    app.on_startup.append(_start_ros)
+    app.on_cleanup.append(_stop_ros)
     app.router.add_get("/", handle_index)
-    app.router.add_get("/stream", handle_stream)
+    app.router.add_get("/snapshot", handle_snapshot)
     app.router.add_get("/events", handle_events)
 
-    print(f"Monitor: http://0.0.0.0:{args.port}")
-    try:
-        web.run_app(app, host="0.0.0.0", port=args.port, print=None)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        try:
-            rclpy.shutdown()
-        except Exception:
-            pass
+    web.run_app(app, host="0.0.0.0", port=args.port, print=None, shutdown_timeout=2.0)
