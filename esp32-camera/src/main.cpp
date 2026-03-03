@@ -3,7 +3,7 @@
 #include "camera_pins.h"
 
 // --- Configuration ---
-#define SERIAL_BAUD    921600
+#define SERIAL_BAUD    2000000
 #define FRAME_WIDTH    FRAMESIZE_QVGA  // 320x240 — good balance for UART
 #define JPEG_QUALITY   12              // 10-63, lower = better quality, bigger file
 
@@ -147,10 +147,6 @@ static void handle_command(const String &cmd) {
 
 void setup() {
     Serial.begin(SERIAL_BAUD);
-
-    // Disable flash LED
-    pinMode(FLASH_GPIO_NUM, OUTPUT);
-    digitalWrite(FLASH_GPIO_NUM, LOW);
 
     Serial.println("ESP32-CAM booting...");
 

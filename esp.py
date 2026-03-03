@@ -65,6 +65,7 @@ def cleanup_gpio():
 
 
 def enter_bootloader():
+    """Put ESP32 into bootloader mode. Holds GPIO0 LOW until release_bootloader()."""
     print("[*] Entering bootloader mode...")
     GPIO.output(BOOT_PIN, GPIO.LOW)
     time.sleep(0.1)
@@ -72,6 +73,11 @@ def enter_bootloader():
     time.sleep(0.1)
     GPIO.output(RESET_PIN, GPIO.HIGH)
     time.sleep(0.5)
+    # Keep GPIO0 LOW — esptool needs bootloader to stay active.
+    # Call release_bootloader() after flashing.
+
+
+def release_bootloader():
     GPIO.output(BOOT_PIN, GPIO.HIGH)
 
 
@@ -100,9 +106,12 @@ def _find_project(name: str) -> Path:
     return candidate.resolve()
 
 
-def _find_firmware(project_dir: Path) -> Path | None:
+def _find_build_dir(project_dir: Path) -> Path | None:
+    """Find the PlatformIO build env directory containing firmware.bin."""
     bins = sorted(project_dir.glob(_FW_GLOB))
-    return bins[0] if bins else None
+    if not bins:
+        return None
+    return bins[0].parent
 
 
 # ─── Commands ───
@@ -172,34 +181,60 @@ def cmd_build(args):
         print("[err] Build failed")
         sys.exit(1)
 
-    fw = _find_firmware(project_dir)
-    if fw is None:
+    build_dir = _find_build_dir(project_dir)
+    if build_dir is None:
         print("[err] Build succeeded but no firmware.bin found")
         sys.exit(1)
 
+    fw = build_dir / "firmware.bin"
     print(f"[ok] {fw} ({fw.stat().st_size:,} bytes)")
-    return fw
+    return build_dir
 
 
 def cmd_flash(args):
     if args.no_build:
         project_dir = _find_project(args.name)
-        fw = _find_firmware(project_dir)
-        if fw is None:
+        build_dir = _find_build_dir(project_dir)
+        if build_dir is None:
             print(f"[err] No compiled binary in {project_dir}")
             print("  Run a build first, or drop --no-build")
             sys.exit(1)
-        print(f"[*] Using existing binary: {fw}")
+        print(f"[*] Using existing build: {build_dir}")
     else:
-        fw = cmd_build(args)
+        build_dir = cmd_build(args)
+
+    # ESP32 Arduino partition layout:
+    #   0x1000  - bootloader.bin
+    #   0x8000  - partitions.bin
+    #   0x10000 - firmware.bin (application)
+    bootloader = build_dir / "bootloader.bin"
+    partitions = build_dir / "partitions.bin"
+    firmware = build_dir / "firmware.bin"
+
+    flash_args = []
+    if bootloader.exists():
+        flash_args += ["0x1000", str(bootloader)]
+    if partitions.exists():
+        flash_args += ["0x8000", str(partitions)]
+    flash_args += ["0x10000", str(firmware)]
 
     setup_gpio()
     try:
         enter_bootloader()
-        time.sleep(0.5)
+
+        # Flush any stale data from the serial port
+        try:
+            ser = serial.Serial(SERIAL_PORT, 115200, timeout=0.1)
+            ser.reset_input_buffer()
+            ser.close()
+        except serial.SerialException:
+            pass
+        time.sleep(0.2)
 
         baud = args.baud or FLASH_BAUD
-        print(f"[*] Flashing {fw.name} via {SERIAL_PORT} at {baud} baud...")
+        print(f"[*] Flashing via {SERIAL_PORT} at {baud} baud...")
+        for i in range(0, len(flash_args), 2):
+            print(f"     {flash_args[i]} <- {Path(flash_args[i+1]).name}")
 
         cmd = [
             sys.executable, "-m", "esptool",
@@ -212,8 +247,7 @@ def cmd_flash(args):
             "--flash_mode", "dio",
             "--flash_freq", "80m",
             "--flash_size", "detect",
-            "0x0", str(fw),
-        ]
+        ] + flash_args
         result = subprocess.run(cmd)
 
         if result.returncode != 0:
@@ -221,6 +255,7 @@ def cmd_flash(args):
             sys.exit(1)
 
         print("[ok] Flash complete")
+        release_bootloader()
         time.sleep(0.5)
         reset_esp32()
     finally:

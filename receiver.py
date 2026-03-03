@@ -25,7 +25,7 @@ from pathlib import Path
 import serial
 
 SERIAL_PORT = "/dev/ttyAMA0"
-BAUD_RATE = 921600
+BAUD_RATE = 2000000
 MAGIC = b"\xaa\x55\x01\x00"
 HEADER_SIZE = 8  # 4 magic + 4 length
 OUTPUT_DIR = Path("frames")
@@ -118,18 +118,11 @@ def cmd_snap(args):
     OUTPUT_DIR.mkdir(exist_ok=True)
     ser = open_serial()
 
-    # Wait for ESP32 to be ready
-    time.sleep(0.1)
-    resp = send_command(ser, "SNAP")
+    # SNAP sends binary directly (no text response), so don't use send_command
+    ser.reset_input_buffer()
+    ser.write(b"SNAP\n")
 
-    # If we got a text response, the frame follows
     frame = receive_frame(ser, timeout=5.0)
-    if frame is None:
-        # Maybe the response WAS the frame (no text prefix) — retry
-        ser.reset_input_buffer()
-        send_command(ser, "SNAP")
-        frame = receive_frame(ser, timeout=5.0)
-
     if frame is None:
         print("[!] Failed to capture frame")
         ser.close()
