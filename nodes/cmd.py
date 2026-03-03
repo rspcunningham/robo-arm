@@ -12,6 +12,7 @@ Usage:
 
 import readline  # noqa: F401 — enables arrow keys / history in input()
 import threading
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -21,6 +22,8 @@ from std_srvs.srv import SetBool, Trigger
 HELP = """\
 Commands:
   move <base> <shoulder> <elbow> <hand> [spd=0]
+  goto <base> <shoulder> <elbow> <hand> [force=500]
+                                move and stop on contact
   home                          move to 0 0 1.57 1.57
   torque on|off
   stop                          emergency stop
@@ -35,20 +38,33 @@ class CmdNode(Node):
         self.arm_pub = self.create_publisher(JointState, "/joint_commands", 10)
         self.torque_cli = self.create_client(SetBool, "/torque_enable")
         self.estop_cli = self.create_client(Trigger, "/emergency_stop")
+        # Joint feedback
+        self._last_joints = None
+        self.create_subscription(
+            JointState, "/joint_states", self._on_joints, 10,
+        )
         # Camera
         self._last_frame = None
         self.create_subscription(
             CompressedImage, "/camera/image/compressed", self._on_image, 10,
         )
 
+    def _on_joints(self, msg: JointState):
+        self._last_joints = msg
+
     def _on_image(self, msg: CompressedImage):
         self._last_frame = msg
 
-    def publish_move(self, pos: list[float], spd: float = 100):
+    def emergency_stop(self):
+        if self.estop_cli.wait_for_service(timeout_sec=1.0):
+            self.estop_cli.call_async(Trigger.Request())
+
+    def publish_move(self, pos: list[float], spd: float | None = None):
         msg = JointState()
         msg.name = ["base", "shoulder", "elbow", "hand"]
         msg.position = pos
-        msg.velocity = [spd]
+        if spd is not None:
+            msg.velocity = [spd]
         self.arm_pub.publish(msg)
 
 
@@ -96,12 +112,56 @@ def main():
                 except ValueError:
                     print("Joint values must be numbers")
                     continue
-                spd = 100
+                spd = None
                 for p in parts[5:]:
                     if p.startswith("spd="):
                         spd = float(p[4:])
                 node.publish_move(pos, spd)
                 print("OK")
+
+            elif cmd == "goto":
+                if len(parts) < 5:
+                    print("Usage: goto <base> <shoulder> <elbow> <hand> [force=500]")
+                    continue
+                try:
+                    pos = [float(x) for x in parts[1:5]]
+                except ValueError:
+                    print("Joint values must be numbers")
+                    continue
+                force_limit = 500.0
+                for p in parts[5:]:
+                    if p.startswith("force="):
+                        force_limit = float(p[6:])
+                node.publish_move(pos)
+                print(f"goto {pos} force_limit={force_limit}")
+                tolerance = 0.05
+                try:
+                    while True:
+                        time.sleep(0.05)
+                        js = node._last_joints
+                        if js is None:
+                            continue
+                        # Check effort
+                        if js.effort:
+                            peak = max(abs(e) for e in js.effort)
+                            if peak > force_limit:
+                                node.emergency_stop()
+                                idx = max(range(len(js.effort)),
+                                          key=lambda i: abs(js.effort[i]))
+                                name = js.name[idx] if idx < len(js.name) else str(idx)
+                                print(f"Force limit hit on {name} "
+                                      f"({abs(js.effort[idx]):.0f} > {force_limit:.0f})")
+                                break
+                        # Check position
+                        if len(js.position) >= 4 and all(
+                            abs(js.position[i] - pos[i]) < tolerance
+                            for i in range(4)
+                        ):
+                            print("Reached target")
+                            break
+                except KeyboardInterrupt:
+                    node.emergency_stop()
+                    print("\nAborted")
 
             elif cmd == "torque":
                 if len(parts) < 2:

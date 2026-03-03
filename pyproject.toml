@@ -5,10 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "datasets>=4.0.0",
     "esptool",
     "numpy>=2.4.2",
+    "pandas",
+    "pillow",
     "pip>=26.0.1",
     "platformio>=6.1.19",
+    "pyarrow",
     "pyserial",
     "RPi.GPIO",
 ]
@@ -28,3 +32,5 @@ packages = ["."]
 esp = "esp:main"
 cmd = "nodes.cmd:main"
 launch-nodes = "nodes.launch:main"
+record = "nodes.record:main"
+replay = "nodes.replay:main"

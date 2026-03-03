@@ -91,16 +91,18 @@ class ArmNode(Node):
         if len(msg.position) < 4:
             return
         base, shoulder, elbow, hand = msg.position[:4]
-        spd = msg.velocity[0] if msg.velocity else 0
-        self._send({
+        cmd = {
             "T": 102,
             "base": -base,
             "shoulder": -shoulder,
             "elbow": elbow,
             "hand": math.pi - hand,
-            "spd": spd,
-            "acc": 10,
-        })
+            "spd": 0,
+            "acc": 0,
+        }
+        if msg.velocity:
+            cmd["spd"] = msg.velocity[0]
+        self._send(cmd)
 
     def _srv_torque(self, req, resp):
         self._send({"T": 210, "cmd": 1 if req.data else 0})
