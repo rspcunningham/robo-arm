@@ -1,14 +1,14 @@
 """Record teleop episodes to a LeRobot-compatible dataset.
 
 Usage:
-    uv run record --repo-id local/demos --fps 10 --task "pick up block" --num-episodes 3
+    uv run record --repo-id my-org/demos --fps 10 --task "pick up block" --num-episodes 3
 
 Creates a LeRobot v3.0 dataset with:
   - observation.images.front  (480, 640, 3) image
   - observation.state         (4,) float32 joint positions
   - action                    (4,) float32 (= current state during teleop)
 
-Writes directly with HF datasets + PyArrow (no torch/lerobot import needed).
+Writes directly with HF datasets + PyArrow, then pushes to a HF dataset repo.
 Uses daemon-thread spin so launch.py does NOT auto-detect this as a node.
 """
 
@@ -27,10 +27,18 @@ import rclpy
 from datasets.table import embed_table_storage
 from PIL import Image
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, JointState
 from std_srvs.srv import SetBool
 
-from nodes._util import JOINT_NAMES, dataset_root, spin_in_background, shutdown_and_exit
+from nodes._util import (
+    JOINT_NAMES,
+    dataset_root,
+    pull_dataset,
+    push_dataset,
+    spin_in_background,
+    shutdown_and_exit,
+)
 
 CODEBASE_VERSION = "v3.0"
 LEROBOT_FEATURES = {
@@ -118,12 +126,28 @@ def load_dataset_info(root: Path) -> dict:
         return json.load(f)
 
 
+def episode_paths(root: Path, info: dict, ep_idx: int) -> tuple[Path, Path, int, int]:
+    """Return data/meta parquet paths for an episode."""
+    chunk_size = int(info["chunks_size"])
+    chunk_idx = ep_idx // chunk_size
+    file_idx = ep_idx % chunk_size
+
+    data_path = root / "data" / f"chunk-{chunk_idx:03d}" / f"file-{file_idx:03d}.parquet"
+    meta_path = (
+        root / "meta" / "episodes" / f"chunk-{chunk_idx:03d}" / f"file-{file_idx:03d}.parquet"
+    )
+    data_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    return data_path, meta_path, chunk_idx, file_idx
+
+
 def save_episode(root: Path, info: dict, frames: list[dict], task: str):
     """Write one episode to the dataset (data parquet + episode metadata + tasks)."""
     ep_idx = info["total_episodes"]
     global_start = info["total_frames"]
     n = len(frames)
     fps = info["fps"]
+    data_path, ep_path, chunk_idx, file_idx = episode_paths(root, info, ep_idx)
 
     # --- Resolve task index ---
     tasks_path = root / "meta" / "tasks.parquet"
@@ -161,12 +185,7 @@ def save_episode(root: Path, info: dict, frames: list[dict], task: str):
     ep_dataset = ep_dataset.map(embed_table_storage, batched=False)
     table = ep_dataset.with_format("arrow")[:]
 
-    # Write / append data parquet
-    data_path = root / "data" / "chunk-000" / "file-000.parquet"
-    if data_path.exists():
-        existing = pq.read_table(data_path)
-        import pyarrow as pa
-        table = pa.concat_tables([existing, table])
+    # One parquet file per episode keeps HF sync incremental.
     pq.write_table(table, data_path)
 
     # --- Episode metadata ---
@@ -184,19 +203,15 @@ def save_episode(root: Path, info: dict, frames: list[dict], task: str):
         "length": [n],
         "dataset_from_index": [global_start],
         "dataset_to_index": [global_start + n],
-        "data/chunk_index": [0],
-        "data/file_index": [0],
-        "meta/episodes/chunk_index": [0],
-        "meta/episodes/file_index": [0],
+        "data/chunk_index": [chunk_idx],
+        "data/file_index": [file_idx],
+        "meta/episodes/chunk_index": [chunk_idx],
+        "meta/episodes/file_index": [file_idx],
         **ep_stats,
     }
 
     import pyarrow as pa
     ep_table = pa.table({k: pa.array(v) for k, v in ep_meta.items()})
-    ep_path = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
-    if ep_path.exists():
-        existing = pq.read_table(ep_path)
-        ep_table = pa.concat_tables([existing, ep_table])
     pq.write_table(ep_table, ep_path)
 
     # --- Update info ---
@@ -216,7 +231,10 @@ class RecordNode(Node):
         self._last_frame = None
         self.create_subscription(JointState, "/joint_states", self._on_joints, 10)
         self.create_subscription(
-            CompressedImage, "/camera/image/compressed", self._on_image, 10,
+            CompressedImage,
+            "/camera/image/compressed",
+            self._on_image,
+            qos_profile_sensor_data,
         )
 
     def _on_joints(self, msg: JointState):
@@ -228,10 +246,15 @@ class RecordNode(Node):
 
 def main():
     parser = argparse.ArgumentParser(description="Record teleop episodes")
-    parser.add_argument("--repo-id", required=True, help="Dataset repo id, e.g. local/demos")
+    parser.add_argument("--repo-id", required=True, help="Dataset repo id, e.g. my-org/demos")
     parser.add_argument("--fps", type=int, default=10, help="Recording FPS (default: 10)")
     parser.add_argument("--task", default="", help="Task description")
     parser.add_argument("--num-episodes", type=int, default=1, help="Number of episodes to record")
+    parser.add_argument(
+        "--public",
+        action="store_true",
+        help="Create the HF dataset repo as public instead of private",
+    )
     args = parser.parse_args()
 
     rclpy.init()
@@ -258,6 +281,12 @@ def main():
 
     # Create or load existing dataset
     root = dataset_root(args.repo_id)
+    try:
+        print(f"Pulling latest dataset from HF: {args.repo_id}...", end="", flush=True)
+        pull_dataset(root, args.repo_id, create_if_missing=True, private=not args.public)
+        print(" ok.")
+    except Exception as exc:
+        print(f" skipped ({exc})")
     if (root / "meta" / "info.json").exists():
         info = load_dataset_info(root)
         print(f"Opened existing dataset: {args.repo_id} ({info['total_episodes']} episodes)")
@@ -311,6 +340,17 @@ def main():
             print(f"\nSaving episode ({len(frame_buf)} frames)...", end="", flush=True)
             save_episode(root, info, frame_buf, args.task)
             print(f" done (episode {info['total_episodes'] - 1})")
+            try:
+                print(f"Pushing dataset to HF: {args.repo_id}...", end="", flush=True)
+                push_dataset(
+                    root,
+                    args.repo_id,
+                    private=not args.public,
+                    commit_message=f"Add episode {info['total_episodes'] - 1}",
+                )
+                print(" ok.")
+            except Exception as exc:
+                print(f" failed ({exc})")
             episode += 1
 
     except KeyboardInterrupt:
