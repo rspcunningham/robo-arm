@@ -16,6 +16,7 @@ dependencies = [
     "pyarrow",
     "pyserial",
     "RPi.GPIO",
+    "spidev",
 ]
 
 [tool.uv]

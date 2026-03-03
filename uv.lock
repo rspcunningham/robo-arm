@@ -395,6 +395,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pyserial" },
     { name = "rpi-gpio" },
+    { name = "spidev" },
 ]
 
 [package.metadata]
@@ -410,6 +411,7 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "pyserial" },
     { name = "rpi-gpio" },
+    { name = "spidev" },
 ]
 
 [[package]]
@@ -1411,6 +1413,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
 ]
+
+[[package]]
+name = "spidev"
+version = "3.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/67/87/039b6eeea781598015b538691bc174cc0bf77df9d4d2d3b8bf9245c0de8c/spidev-3.8.tar.gz", hash = "sha256:2bc02fb8c6312d519ebf1f4331067427c0921d3f77b8bcaf05189a2e8b8382c0", size = 13893, upload-time = "2025-09-15T18:56:20.672Z" }
 
 [[package]]
 name = "starlette"
