@@ -3,3 +3,4 @@
 */.pio/*
 pi/data/
 pi/log/
+MUJOCO_LOG.TXT
