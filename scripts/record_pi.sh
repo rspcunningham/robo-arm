@@ -15,4 +15,4 @@ for arg in "$@"; do
 done
 
 remote_cmd="source /opt/ros/*/setup.bash && cd $(printf '%q' "${PI_DIR}/pi") && ./.venv/bin/record ${args[*]}"
-ssh "${PI_HOST}" "bash -lc $(printf '%q' "${remote_cmd}")"
+ssh -t "${PI_HOST}" "bash -lc $(printf '%q' "${remote_cmd}")"
