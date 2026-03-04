@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Mac-only experiments for the robo-arm repo"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "lerobot",
+]
 
 [tool.uv]
 package = false
