@@ -29,6 +29,7 @@ from nodes._util import (
     pull_dataset,
     shutdown_background_node,
     spin_in_background,
+    wait_for_condition,
     wait_for_future,
 )
 
@@ -169,22 +170,22 @@ def main():
     node = RecordNode()
     spin_thread = spin_in_background(node)
 
-    # Wait for arm + camera
-    print("Waiting for arm...", end="", flush=True)
-    while node._last_joints is None:
-        time.sleep(0.1)
-    print(" ok. Waiting for camera...", end="", flush=True)
-    while node._last_frame is None:
-        time.sleep(0.1)
-    print(" ok.")
+    try:
+        print("Waiting for arm...", end="", flush=True)
+        wait_for_condition(lambda: node._last_joints is not None, 5.0, "joint telemetry")
+        print(" ok. Waiting for camera...", end="", flush=True)
+        wait_for_condition(lambda: node._last_frame is not None, 5.0, "camera frames")
+        print(" ok.")
 
-    # Release torque so the arm can be guided by hand
-    if not node.torque_cli.wait_for_service(timeout_sec=2.0):
-        raise RuntimeError("Torque service is unavailable")
-    req = SetBool.Request()
-    req.data = False
-    wait_for_future(node.torque_cli.call_async(req), 2.0)
-    print("Torque released.")
+        if not node.torque_cli.wait_for_service(timeout_sec=2.0):
+            raise RuntimeError("Torque service is unavailable")
+        req = SetBool.Request()
+        req.data = False
+        wait_for_future(node.torque_cli.call_async(req), 2.0)
+        print("Torque released.")
+    except Exception:
+        shutdown_background_node(node, spin_thread)
+        raise
 
     root = dataset_root(args.repo_id)
     dataset = open_or_create_dataset(args.repo_id, root, args.fps)

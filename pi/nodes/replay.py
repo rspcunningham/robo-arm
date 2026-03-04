@@ -21,6 +21,7 @@ from nodes._util import (
     pull_dataset,
     shutdown_background_node,
     spin_in_background,
+    wait_for_condition,
 )
 
 
@@ -76,10 +77,17 @@ def main():
     node = ReplayNode()
     spin_thread = spin_in_background(node)
 
-    print("Connecting...", end="", flush=True)
-    while node.arm_pub.get_subscription_count() == 0:
-        time.sleep(0.1)
-    print(" ready.")
+    try:
+        print("Connecting...", end="", flush=True)
+        wait_for_condition(
+            lambda: node.arm_pub.get_subscription_count() > 0,
+            5.0,
+            "arm subscriber",
+        )
+        print(" ready.")
+    except Exception:
+        shutdown_background_node(node, spin_thread)
+        raise
 
     interval = 1.0 / dataset.fps
     total = len(actions)

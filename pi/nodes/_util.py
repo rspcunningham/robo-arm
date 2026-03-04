@@ -104,6 +104,20 @@ def wait_for_future(future, timeout_sec: float):
     return future.result()
 
 
+def wait_for_condition(
+    predicate,
+    timeout_sec: float,
+    description: str,
+    poll_interval_sec: float = 0.05,
+):
+    """Wait for a condition to become true, then return."""
+    deadline = time.monotonic() + timeout_sec
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Timed out waiting for {description}")
+        time.sleep(poll_interval_sec)
+
+
 def shutdown_background_node(node: Node, spin_thread: threading.Thread, join_timeout_sec: float = 3.0):
     """Shutdown ROS, wait for the spin thread to stop, then destroy the node."""
     try:
