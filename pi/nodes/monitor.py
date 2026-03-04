@@ -386,6 +386,18 @@ HTML_PAGE = """\
 
       <div class="summary-group">
         <div class="summary-row">
+          <div class="summary-label">Work Light</div>
+          <div class="summary-value" id="light-state">Disabled</div>
+        </div>
+        <div class="summary-meta" id="light-meta">End-effector light is off</div>
+        <div class="control-row">
+          <button id="light-enable" class="control-button primary" type="button">Enable</button>
+          <button id="light-disable" class="control-button secondary" type="button">Disable</button>
+        </div>
+      </div>
+
+      <div class="summary-group">
+        <div class="summary-row">
           <div class="summary-label">SPI Recoveries / Min</div>
           <div class="summary-value" id="spi-rate">0</div>
         </div>
@@ -435,6 +447,10 @@ const torqueState = document.getElementById('torque-state');
 const torqueMeta = document.getElementById('torque-meta');
 const torqueEnableBtn = document.getElementById('torque-enable');
 const torqueDisableBtn = document.getElementById('torque-disable');
+const lightState = document.getElementById('light-state');
+const lightMeta = document.getElementById('light-meta');
+const lightEnableBtn = document.getElementById('light-enable');
+const lightDisableBtn = document.getElementById('light-disable');
 
 JOINTS.forEach(name => {
   let row = posTable.insertRow();
@@ -449,8 +465,10 @@ let lastFrameAt = 0;
 let lastEvent = 0;
 let policyBusy = false;
 let torqueBusy = false;
+let lightBusy = false;
 let latestPolicy = null;
 let latestControl = null;
+let latestLight = null;
 
 function formatAge(seconds) {
   if (seconds == null) return 'Never';
@@ -492,6 +510,12 @@ function setControlButtonsState() {
   policyDisableBtn.disabled = policyBusy || policyLocked || !policyActive;
   torqueEnableBtn.disabled = torqueBusy || torqueLocked || !!control.torque_enabled;
   torqueDisableBtn.disabled = torqueBusy || torqueLocked || !control.torque_enabled;
+}
+
+function setLightButtonsState() {
+  const lightEnabled = latestLight?.enabled ?? false;
+  lightEnableBtn.disabled = lightBusy || lightEnabled;
+  lightDisableBtn.disabled = lightBusy || !lightEnabled;
 }
 
 function renderPolicy() {
@@ -590,6 +614,13 @@ function renderTorque() {
   setControlButtonsState();
 }
 
+function renderLight() {
+  const lightEnabled = latestLight?.enabled ?? false;
+  lightState.textContent = lightEnabled ? 'Enabled' : 'Disabled';
+  lightMeta.textContent = lightEnabled ? 'End-effector light is on' : 'End-effector light is off';
+  setLightButtonsState();
+}
+
 async function setTorqueEnabled(enabled) {
   torqueBusy = true;
   setControlButtonsState();
@@ -609,6 +640,25 @@ async function setTorqueEnabled(enabled) {
   }
 }
 
+async function setLightEnabled(enabled) {
+  lightBusy = true;
+  setLightButtonsState();
+  try {
+    const response = await fetch(enabled ? '/api/light/enable' : '/api/light/disable', {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    footerStatus.textContent = `Light toggle failed: ${error.message}`;
+  } finally {
+    lightBusy = false;
+    setLightButtonsState();
+  }
+}
+
 policyEnableBtn.addEventListener('click', () => {
   setPolicyEnabled(true);
 });
@@ -620,6 +670,12 @@ torqueEnableBtn.addEventListener('click', () => {
 });
 torqueDisableBtn.addEventListener('click', () => {
   setTorqueEnabled(false);
+});
+lightEnableBtn.addEventListener('click', () => {
+  setLightEnabled(true);
+});
+lightDisableBtn.addEventListener('click', () => {
+  setLightEnabled(false);
 });
 
 function refreshDerivedState() {
@@ -642,6 +698,7 @@ function refreshDerivedState() {
 
   renderPolicy();
   renderTorque();
+  renderLight();
 }
 
 async function streamVideo() {
@@ -713,6 +770,7 @@ es.onmessage = event => {
   }
 
   latestControl = data.control || latestControl;
+  latestLight = data.light || latestLight;
   latestPolicy = data.policy || latestPolicy;
 
   refreshDerivedState();
@@ -762,8 +820,12 @@ class MonitorNode(Node):
             "outputs_converged": False,
             "last_error": None,
         }
+        self.last_light_status = {
+            "enabled": False,
+        }
         self.control_policy_cli = self.create_client(SetBool, "/control/set_policy_active")
         self.control_torque_cli = self.create_client(SetBool, "/control/set_manual_torque")
+        self.light_cli = self.create_client(SetBool, "/light_enable")
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -791,6 +853,9 @@ class MonitorNode(Node):
         self.create_subscription(
             String, "/control/status", self._on_control_status, control_qos,
         )
+        self.create_subscription(
+            String, "/light/status", self._on_light_status, control_qos,
+        )
 
     def _notify(self):
         self._loop.call_soon_threadsafe(self.state_event.set)
@@ -800,6 +865,7 @@ class MonitorNode(Node):
             "joints": self.last_joints,
             "spi_health": self.last_spi_health,
             "control": self.last_control_status,
+            "light": self.last_light_status,
             "policy": self.last_policy_status,
         }
 
@@ -860,6 +926,16 @@ class MonitorNode(Node):
         }
         self._notify()
 
+    def _on_light_status(self, msg: String):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        self.last_light_status = {
+            "enabled": bool(payload.get("enabled", False)),
+        }
+        self._notify()
+
 
 async def handle_index(request):
     return web.Response(text=HTML_PAGE, content_type="text/html")
@@ -892,7 +968,7 @@ async def handle_events(request):
     return resp
 
 
-async def _set_control_bool(request, client_attr: str, enabled: bool, unavailable_error: str, default_error: str):
+async def _set_service_bool(request, client_attr: str, enabled: bool, unavailable_error: str, default_error: str):
     node = request.app["node"]
     client = getattr(node, client_attr)
     if not await asyncio.to_thread(client.wait_for_service, 1.0):
@@ -919,7 +995,7 @@ async def _set_control_bool(request, client_attr: str, enabled: bool, unavailabl
 
 
 async def handle_control_policy_enable(request):
-    return await _set_control_bool(
+    return await _set_service_bool(
         request,
         "control_policy_cli",
         True,
@@ -929,7 +1005,7 @@ async def handle_control_policy_enable(request):
 
 
 async def handle_control_policy_disable(request):
-    return await _set_control_bool(
+    return await _set_service_bool(
         request,
         "control_policy_cli",
         False,
@@ -939,7 +1015,7 @@ async def handle_control_policy_disable(request):
 
 
 async def handle_control_torque_enable(request):
-    return await _set_control_bool(
+    return await _set_service_bool(
         request,
         "control_torque_cli",
         True,
@@ -949,12 +1025,32 @@ async def handle_control_torque_enable(request):
 
 
 async def handle_control_torque_disable(request):
-    return await _set_control_bool(
+    return await _set_service_bool(
         request,
         "control_torque_cli",
         False,
         "Control manager torque service unavailable",
         "Torque toggle failed",
+    )
+
+
+async def handle_light_enable(request):
+    return await _set_service_bool(
+        request,
+        "light_cli",
+        True,
+        "Light service unavailable",
+        "Light toggle failed",
+    )
+
+
+async def handle_light_disable(request):
+    return await _set_service_bool(
+        request,
+        "light_cli",
+        False,
+        "Light service unavailable",
+        "Light toggle failed",
     )
 
 
@@ -986,6 +1082,8 @@ def main():
     app.router.add_post("/api/control/policy/disable", handle_control_policy_disable)
     app.router.add_post("/api/control/torque/enable", handle_control_torque_enable)
     app.router.add_post("/api/control/torque/disable", handle_control_torque_disable)
+    app.router.add_post("/api/light/enable", handle_light_enable)
+    app.router.add_post("/api/light/disable", handle_light_disable)
 
     web.run_app(
         app,

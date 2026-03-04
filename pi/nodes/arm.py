@@ -1,7 +1,7 @@
 """RoArm-M2-S ROS2 driver node.
 
 Publishes joint states at 20 Hz, accepts joint commands,
-and exposes torque enable / emergency stop services.
+and exposes torque, light, and emergency-stop services.
 """
 
 import json
@@ -9,11 +9,20 @@ import math
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
+from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 import serial
 
 from nodes._util import JOINT_NAMES, publish_or_ignore_shutdown, run_node
+
+STATUS_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 
 class ArmNode(Node):
@@ -30,9 +39,11 @@ class ArmNode(Node):
         # Silence debug output
         self._send({"T": 605, "cmd": 0})
         self.ser.reset_input_buffer()
+        self._light_enabled = False
 
         # Publisher
         self.pub = self.create_publisher(JointState, "/joint_states", 10)
+        self.light_status_pub = self.create_publisher(String, "/light/status", STATUS_QOS)
 
         # Subscriber
         self.create_subscription(
@@ -41,10 +52,12 @@ class ArmNode(Node):
 
         # Services
         self.create_service(SetBool, "/torque_enable", self._srv_torque)
+        self.create_service(SetBool, "/light_enable", self._srv_light)
         self.create_service(Trigger, "/emergency_stop", self._srv_estop)
 
         # Poll at 20 Hz
         self.create_timer(0.05, self._poll)
+        self._publish_light_status()
 
         self.get_logger().info("Arm node ready")
 
@@ -61,6 +74,11 @@ class ArmNode(Node):
             return json.loads(line)
         except (json.JSONDecodeError, UnicodeDecodeError):
             return None
+
+    def _publish_light_status(self):
+        msg = String()
+        msg.data = json.dumps({"enabled": self._light_enabled})
+        publish_or_ignore_shutdown(self.light_status_pub, msg)
 
     # -- callbacks -----------------------------------------------------
 
@@ -107,6 +125,15 @@ class ArmNode(Node):
     def _srv_torque(self, req, resp):
         self._send({"T": 210, "cmd": 1 if req.data else 0})
         resp.success = True
+        return resp
+
+    def _srv_light(self, req, resp):
+        self._send({"T": 114, "led": 255 if req.data else 0})
+        self._light_enabled = bool(req.data)
+        self._publish_light_status()
+        state = "enabled" if req.data else "disabled"
+        resp.success = True
+        resp.message = f"Light {state}"
         return resp
 
     def _srv_estop(self, req, resp):
