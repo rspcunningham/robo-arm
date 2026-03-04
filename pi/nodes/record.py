@@ -213,6 +213,11 @@ def main():
             except EOFError:
                 print("\nInput closed before recording started.")
                 break
+            try:
+                input("Press Enter again to begin recording...")
+            except EOFError:
+                print("\nInput closed before recording started.")
+                break
             frame_count = 0
             stop_flag.clear()
             enter_thread = threading.Thread(target=_wait_enter, daemon=True)
