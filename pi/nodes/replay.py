@@ -8,11 +8,14 @@ replay path matches the sharded LeRobot v3 on-disk layout.
 """
 
 import argparse
+import json
 import time
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from nodes._util import (
@@ -22,6 +25,7 @@ from nodes._util import (
     shutdown_background_node,
     spin_in_background,
     wait_for_condition,
+    wait_for_future,
 )
 
 
@@ -40,6 +44,27 @@ class ReplayNode(ArmCommander, Node):
         super().__init__("replay")
         self.arm_pub = self.create_publisher(JointState, "/joint_commands", 10)
         self.estop_cli = self.create_client(Trigger, "/emergency_stop")
+        self.enter_replay_cli = self.create_client(Trigger, "/control/enter_replay_mode")
+        self.exit_replay_cli = self.create_client(Trigger, "/control/exit_replay_mode")
+        self._last_control = None
+        control_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.control_sub = self.create_subscription(
+            String,
+            "/control/status",
+            self._on_control,
+            control_qos,
+        )
+
+    def _on_control(self, msg: String):
+        try:
+            self._last_control = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
 
 
 def main():
@@ -76,6 +101,16 @@ def main():
     rclpy.init()
     node = ReplayNode()
     spin_thread = spin_in_background(node)
+    replay_mode_claimed = False
+
+    def _set_replay_mode(active: bool):
+        client = node.enter_replay_cli if active else node.exit_replay_cli
+        action = "enter" if active else "exit"
+        if not client.wait_for_service(timeout_sec=2.0):
+            raise RuntimeError("Control manager is unavailable")
+        result = wait_for_future(client.call_async(Trigger.Request()), 2.0)
+        if not result.success:
+            raise RuntimeError(result.message or f"Failed to {action} replay mode")
 
     try:
         print("Connecting...", end="", flush=True)
@@ -85,7 +120,25 @@ def main():
             "arm subscriber",
         )
         print(" ready.")
+
+        _set_replay_mode(True)
+        replay_mode_claimed = True
+        wait_for_condition(
+            lambda: (
+                node._last_control is not None
+                and node._last_control.get("mode") == "replay"
+                and node._last_control.get("outputs_converged")
+            ),
+            2.0,
+            "replay mode to settle",
+        )
+        print("Replay mode active.")
     except Exception:
+        if replay_mode_claimed:
+            try:
+                _set_replay_mode(False)
+            except Exception:
+                pass
         shutdown_background_node(node, spin_thread)
         raise
 
@@ -106,6 +159,12 @@ def main():
     except KeyboardInterrupt:
         node.emergency_stop()
         print("\nAborted - emergency stop sent")
+    finally:
+        if replay_mode_claimed:
+            try:
+                _set_replay_mode(False)
+            except Exception as exc:
+                print(f"\nFailed to return to idle mode: {exc}")
 
     shutdown_background_node(node, spin_thread)
 

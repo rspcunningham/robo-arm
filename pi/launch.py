@@ -12,6 +12,7 @@ def generate_launch_description():
     return LaunchDescription([
         ExecuteProcess(cmd=[f"{VENV_BIN}/arm"], output="screen"),
         ExecuteProcess(cmd=[f"{VENV_BIN}/cam"], output="screen"),
+        ExecuteProcess(cmd=[f"{VENV_BIN}/control-manager"], output="screen"),
         ExecuteProcess(cmd=[f"{VENV_BIN}/policy-client"], output="screen"),
         ExecuteProcess(cmd=[f"{VENV_BIN}/monitor"], output="screen"),
     ])

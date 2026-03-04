@@ -1,4 +1,4 @@
-"""Web monitor for robot camera, telemetry, and policy control.
+"""Web monitor for robot camera, telemetry, and control state.
 
 Streams live camera view and joint data to any browser on the local network.
 Uses daemon-thread spin so launch.py does NOT auto-detect this as a node.
@@ -14,7 +14,7 @@ import json
 import rclpy
 from aiohttp import web
 from rclpy.node import Node
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, JointState
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
@@ -314,7 +314,7 @@ HTML_PAGE = """\
     <div>
       <div class="eyebrow">Pi Telemetry</div>
       <h1>Robot Monitor</h1>
-      <p class="subhead">Live camera, joint telemetry, and local policy control.</p>
+      <p class="subhead">Live camera, joint telemetry, and local policy plus torque control.</p>
     </div>
     <div id="status-pill" class="status-pill">Awaiting stream</div>
   </section>
@@ -374,6 +374,18 @@ HTML_PAGE = """\
 
       <div class="summary-group">
         <div class="summary-row">
+          <div class="summary-label">Joint Torque</div>
+          <div class="summary-value" id="torque-state">Enabled</div>
+        </div>
+        <div class="summary-meta" id="torque-meta">Manual torque lock is on</div>
+        <div class="control-row">
+          <button id="torque-enable" class="control-button primary" type="button">Enable</button>
+          <button id="torque-disable" class="control-button secondary" type="button">Disable</button>
+        </div>
+      </div>
+
+      <div class="summary-group">
+        <div class="summary-row">
           <div class="summary-label">SPI Recoveries / Min</div>
           <div class="summary-value" id="spi-rate">0</div>
         </div>
@@ -419,6 +431,10 @@ const policyState = document.getElementById('policy-state');
 const policyMeta = document.getElementById('policy-meta');
 const policyEnableBtn = document.getElementById('policy-enable');
 const policyDisableBtn = document.getElementById('policy-disable');
+const torqueState = document.getElementById('torque-state');
+const torqueMeta = document.getElementById('torque-meta');
+const torqueEnableBtn = document.getElementById('torque-enable');
+const torqueDisableBtn = document.getElementById('torque-disable');
 
 JOINTS.forEach(name => {
   let row = posTable.insertRow();
@@ -432,7 +448,9 @@ let prevUrl = null;
 let lastFrameAt = 0;
 let lastEvent = 0;
 let policyBusy = false;
+let torqueBusy = false;
 let latestPolicy = null;
+let latestControl = null;
 
 function formatAge(seconds) {
   if (seconds == null) return 'Never';
@@ -452,12 +470,32 @@ function setConnectionState(label, className, footer) {
   footerStatus.textContent = footer;
 }
 
-function setPolicyButtonsState() {
-  policyEnableBtn.disabled = policyBusy || (latestPolicy?.enabled ?? false);
-  policyDisableBtn.disabled = policyBusy || !(latestPolicy?.enabled ?? false);
+function getControl() {
+  return latestControl || {
+    mode: 'idle',
+    manual_torque_enabled: true,
+    policy_enabled: false,
+    torque_enabled: true,
+    outputs_converged: false,
+    last_error: null,
+  };
+}
+
+function setControlButtonsState() {
+  const control = getControl();
+  const mode = control.mode;
+  const policyActive = mode === 'policy';
+  const policyLocked = mode === 'record' || mode === 'replay';
+  const torqueLocked = mode !== 'idle';
+
+  policyEnableBtn.disabled = policyBusy || policyLocked || policyActive;
+  policyDisableBtn.disabled = policyBusy || policyLocked || !policyActive;
+  torqueEnableBtn.disabled = torqueBusy || torqueLocked || !!control.torque_enabled;
+  torqueDisableBtn.disabled = torqueBusy || torqueLocked || !control.torque_enabled;
 }
 
 function renderPolicy() {
+  const control = getControl();
   const policy = latestPolicy || {
     enabled: false,
     request_in_flight: false,
@@ -466,9 +504,24 @@ function renderPolicy() {
     last_error: null,
   };
 
-  policyState.textContent = policy.enabled ? 'Enabled' : 'Disabled';
+  if (control.mode === 'record') {
+    policyState.textContent = 'Disabled';
+    policyMeta.textContent = 'Policy is locked off while recording';
+    setControlButtonsState();
+    return;
+  }
 
-  if (!policy.enabled) {
+  if (control.mode === 'replay') {
+    policyState.textContent = 'Disabled';
+    policyMeta.textContent = 'Policy is locked off during replay';
+    setControlButtonsState();
+    return;
+  }
+
+  const policyEnabled = control.mode === 'policy';
+  policyState.textContent = policyEnabled ? 'Enabled' : 'Disabled';
+
+  if (!policyEnabled) {
     policyMeta.textContent = 'Local policy control is off';
   } else if (policy.server_reachable === false) {
     policyMeta.textContent = policy.last_error
@@ -488,14 +541,18 @@ function renderPolicy() {
     policyMeta.textContent = 'Policy enabled · waiting for observations';
   }
 
-  setPolicyButtonsState();
+  if (!control.outputs_converged && control.last_error) {
+    policyMeta.textContent = `Applying policy mode · ${control.last_error}`;
+  }
+
+  setControlButtonsState();
 }
 
 async function setPolicyEnabled(enabled) {
   policyBusy = true;
-  setPolicyButtonsState();
+  setControlButtonsState();
   try {
-    const response = await fetch(enabled ? '/api/policy/enable' : '/api/policy/disable', {
+    const response = await fetch(enabled ? '/api/control/policy/enable' : '/api/control/policy/disable', {
       method: 'POST',
     });
     if (!response.ok) {
@@ -506,7 +563,49 @@ async function setPolicyEnabled(enabled) {
     footerStatus.textContent = `Policy toggle failed: ${error.message}`;
   } finally {
     policyBusy = false;
-    setPolicyButtonsState();
+    setControlButtonsState();
+  }
+}
+
+function renderTorque() {
+  const control = getControl();
+  torqueState.textContent = control.torque_enabled ? 'Enabled' : 'Disabled';
+
+  if (control.mode === 'policy') {
+    torqueMeta.textContent = 'Torque is locked on automatically while policy is active';
+  } else if (control.mode === 'record') {
+    torqueMeta.textContent = 'Torque is released automatically while recording';
+  } else if (control.mode === 'replay') {
+    torqueMeta.textContent = 'Torque is locked on automatically during replay';
+  } else if (control.torque_enabled) {
+    torqueMeta.textContent = 'Manual torque lock is on';
+  } else {
+    torqueMeta.textContent = 'Manual torque lock is off';
+  }
+
+  if (control.mode === 'idle' && !control.outputs_converged && control.last_error) {
+    torqueMeta.textContent = `Applying torque mode · ${control.last_error}`;
+  }
+
+  setControlButtonsState();
+}
+
+async function setTorqueEnabled(enabled) {
+  torqueBusy = true;
+  setControlButtonsState();
+  try {
+    const response = await fetch(enabled ? '/api/control/torque/enable' : '/api/control/torque/disable', {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    footerStatus.textContent = `Torque toggle failed: ${error.message}`;
+  } finally {
+    torqueBusy = false;
+    setControlButtonsState();
   }
 }
 
@@ -515,6 +614,12 @@ policyEnableBtn.addEventListener('click', () => {
 });
 policyDisableBtn.addEventListener('click', () => {
   setPolicyEnabled(false);
+});
+torqueEnableBtn.addEventListener('click', () => {
+  setTorqueEnabled(true);
+});
+torqueDisableBtn.addEventListener('click', () => {
+  setTorqueEnabled(false);
 });
 
 function refreshDerivedState() {
@@ -536,6 +641,7 @@ function refreshDerivedState() {
   }
 
   renderPolicy();
+  renderTorque();
 }
 
 async function streamVideo() {
@@ -606,6 +712,7 @@ es.onmessage = event => {
     spiLastMeta.textContent = `Last reset was ${formatAge(ageSec)} ago`;
   }
 
+  latestControl = data.control || latestControl;
   latestPolicy = data.policy || latestPolicy;
 
   refreshDerivedState();
@@ -643,10 +750,29 @@ class MonitorNode(Node):
             "last_error": None,
             "policy_url": None,
         }
-        self.policy_enable_cli = self.create_client(SetBool, "/policy_enable")
+        self.last_control_status = {
+            "mode": "idle",
+            "manual_torque_enabled": True,
+            "policy_enabled": False,
+            "torque_enabled": True,
+            "policy_request_in_flight": False,
+            "torque_request_in_flight": False,
+            "policy_service_ready": False,
+            "torque_service_ready": False,
+            "outputs_converged": False,
+            "last_error": None,
+        }
+        self.control_policy_cli = self.create_client(SetBool, "/control/set_policy_active")
+        self.control_torque_cli = self.create_client(SetBool, "/control/set_manual_torque")
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        control_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
@@ -662,6 +788,9 @@ class MonitorNode(Node):
         self.create_subscription(
             String, "/policy/status", self._on_policy_status, 10,
         )
+        self.create_subscription(
+            String, "/control/status", self._on_control_status, control_qos,
+        )
 
     def _notify(self):
         self._loop.call_soon_threadsafe(self.state_event.set)
@@ -670,6 +799,7 @@ class MonitorNode(Node):
         return {
             "joints": self.last_joints,
             "spi_health": self.last_spi_health,
+            "control": self.last_control_status,
             "policy": self.last_policy_status,
         }
 
@@ -711,6 +841,25 @@ class MonitorNode(Node):
         }
         self._notify()
 
+    def _on_control_status(self, msg: String):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        self.last_control_status = {
+            "mode": payload.get("mode", "idle"),
+            "manual_torque_enabled": bool(payload.get("manual_torque_enabled", True)),
+            "policy_enabled": bool(payload.get("policy_enabled", False)),
+            "torque_enabled": bool(payload.get("torque_enabled", True)),
+            "policy_request_in_flight": bool(payload.get("policy_request_in_flight", False)),
+            "torque_request_in_flight": bool(payload.get("torque_request_in_flight", False)),
+            "policy_service_ready": bool(payload.get("policy_service_ready", False)),
+            "torque_service_ready": bool(payload.get("torque_service_ready", False)),
+            "outputs_converged": bool(payload.get("outputs_converged", False)),
+            "last_error": payload.get("last_error"),
+        }
+        self._notify()
+
 
 async def handle_index(request):
     return web.Response(text=HTML_PAGE, content_type="text/html")
@@ -743,17 +892,18 @@ async def handle_events(request):
     return resp
 
 
-async def _set_policy_enabled(request, enabled: bool):
+async def _set_control_bool(request, client_attr: str, enabled: bool, unavailable_error: str, default_error: str):
     node = request.app["node"]
-    if not await asyncio.to_thread(node.policy_enable_cli.wait_for_service, 1.0):
+    client = getattr(node, client_attr)
+    if not await asyncio.to_thread(client.wait_for_service, 1.0):
         return web.json_response(
-            {"error": "Policy toggle service unavailable"},
+            {"error": unavailable_error},
             status=503,
         )
 
     req = SetBool.Request()
     req.data = enabled
-    future = node.policy_enable_cli.call_async(req)
+    future = client.call_async(req)
 
     try:
         result = await asyncio.to_thread(wait_for_future, future, 2.0)
@@ -763,17 +913,49 @@ async def _set_policy_enabled(request, enabled: bool):
         return web.json_response({"error": str(exc)}, status=500)
 
     if not result.success:
-        return web.json_response({"error": result.message or "Policy toggle failed"}, status=500)
+        return web.json_response({"error": result.message or default_error}, status=500)
 
     return web.json_response({"ok": True, "enabled": enabled})
 
 
-async def handle_policy_enable(request):
-    return await _set_policy_enabled(request, True)
+async def handle_control_policy_enable(request):
+    return await _set_control_bool(
+        request,
+        "control_policy_cli",
+        True,
+        "Control manager policy service unavailable",
+        "Policy toggle failed",
+    )
 
 
-async def handle_policy_disable(request):
-    return await _set_policy_enabled(request, False)
+async def handle_control_policy_disable(request):
+    return await _set_control_bool(
+        request,
+        "control_policy_cli",
+        False,
+        "Control manager policy service unavailable",
+        "Policy toggle failed",
+    )
+
+
+async def handle_control_torque_enable(request):
+    return await _set_control_bool(
+        request,
+        "control_torque_cli",
+        True,
+        "Control manager torque service unavailable",
+        "Torque toggle failed",
+    )
+
+
+async def handle_control_torque_disable(request):
+    return await _set_control_bool(
+        request,
+        "control_torque_cli",
+        False,
+        "Control manager torque service unavailable",
+        "Torque toggle failed",
+    )
 
 
 async def _start_ros(app):
@@ -800,8 +982,10 @@ def main():
     app.router.add_get("/", handle_index)
     app.router.add_get("/snapshot", handle_snapshot)
     app.router.add_get("/events", handle_events)
-    app.router.add_post("/api/policy/enable", handle_policy_enable)
-    app.router.add_post("/api/policy/disable", handle_policy_disable)
+    app.router.add_post("/api/control/policy/enable", handle_control_policy_enable)
+    app.router.add_post("/api/control/policy/disable", handle_control_policy_disable)
+    app.router.add_post("/api/control/torque/enable", handle_control_torque_enable)
+    app.router.add_post("/api/control/torque/disable", handle_control_torque_disable)
 
     web.run_app(
         app,

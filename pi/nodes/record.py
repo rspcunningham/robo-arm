@@ -9,6 +9,7 @@ LeRobot loaders, sharding rules, metadata, and Hub tooling.
 
 import argparse
 import io
+import json
 import shutil
 import threading
 import time
@@ -19,9 +20,10 @@ import numpy as np
 import rclpy
 from PIL import Image
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, JointState
-from std_srvs.srv import SetBool
+from std_msgs.msg import String
+from std_srvs.srv import Trigger
 
 from nodes._util import (
     JOINT_NAMES,
@@ -130,9 +132,17 @@ def build_frame(task: str, joints: JointState, image_msg: CompressedImage) -> di
 class RecordNode(Node):
     def __init__(self):
         super().__init__("record")
-        self.torque_cli = self.create_client(SetBool, "/torque_enable")
+        self.enter_record_cli = self.create_client(Trigger, "/control/enter_record_mode")
+        self.exit_record_cli = self.create_client(Trigger, "/control/exit_record_mode")
         self._last_joints = None
         self._last_frame = None
+        self._last_control = None
+        control_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
         self._joints_sub = self.create_subscription(
             JointState,
             "/joint_states",
@@ -145,12 +155,24 @@ class RecordNode(Node):
             self._on_image,
             qos_profile_sensor_data,
         )
+        self._control_sub = self.create_subscription(
+            String,
+            "/control/status",
+            self._on_control,
+            control_qos,
+        )
 
     def _on_joints(self, msg: JointState):
         self._last_joints = msg
 
     def _on_image(self, msg: CompressedImage):
         self._last_frame = msg
+
+    def _on_control(self, msg: String):
+        try:
+            self._last_control = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
 
 
 def main():
@@ -169,6 +191,16 @@ def main():
     rclpy.init()
     node = RecordNode()
     spin_thread = spin_in_background(node)
+    record_mode_claimed = False
+
+    def _set_record_mode(active: bool):
+        client = node.enter_record_cli if active else node.exit_record_cli
+        action = "enter" if active else "exit"
+        if not client.wait_for_service(timeout_sec=2.0):
+            raise RuntimeError("Control manager is unavailable")
+        result = wait_for_future(client.call_async(Trigger.Request()), 2.0)
+        if not result.success:
+            raise RuntimeError(result.message or f"Failed to {action} record mode")
 
     try:
         print("Waiting for arm...", end="", flush=True)
@@ -177,13 +209,24 @@ def main():
         wait_for_condition(lambda: node._last_frame is not None, 5.0, "camera frames")
         print(" ok.")
 
-        if not node.torque_cli.wait_for_service(timeout_sec=2.0):
-            raise RuntimeError("Torque service is unavailable")
-        req = SetBool.Request()
-        req.data = False
-        wait_for_future(node.torque_cli.call_async(req), 2.0)
-        print("Torque released.")
+        _set_record_mode(True)
+        record_mode_claimed = True
+        wait_for_condition(
+            lambda: (
+                node._last_control is not None
+                and node._last_control.get("mode") == "record"
+                and node._last_control.get("outputs_converged")
+            ),
+            2.0,
+            "record mode to settle",
+        )
+        print("Record mode active.")
     except Exception:
+        if record_mode_claimed:
+            try:
+                _set_record_mode(False)
+            except Exception:
+                pass
         shutdown_background_node(node, spin_thread)
         raise
 
@@ -260,6 +303,12 @@ def main():
             print("\nDiscarded the in-progress episode.")
         print("\nFinished recording.")
     finally:
+        if record_mode_claimed:
+            try:
+                _set_record_mode(False)
+            except Exception as exc:
+                print(f"Failed to return to idle mode: {exc}")
+
         if saved_episodes:
             print("Finalizing dataset...", end="", flush=True)
             dataset.finalize()
