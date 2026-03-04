@@ -27,7 +27,9 @@ from nodes._util import (
     JOINT_NAMES,
     dataset_root,
     pull_dataset,
+    shutdown_background_node,
     spin_in_background,
+    wait_for_future,
 )
 
 LEROBOT_FEATURES = {
@@ -165,7 +167,7 @@ def main():
 
     rclpy.init()
     node = RecordNode()
-    spin_in_background(node)
+    spin_thread = spin_in_background(node)
 
     # Wait for arm + camera
     print("Waiting for arm...", end="", flush=True)
@@ -177,13 +179,12 @@ def main():
     print(" ok.")
 
     # Release torque so the arm can be guided by hand
-    if node.torque_cli.wait_for_service(timeout_sec=2.0):
-        req = SetBool.Request()
-        req.data = False
-        node.torque_cli.call_async(req)
-        print("Torque released.")
-    else:
-        print("Warning: torque service not available")
+    if not node.torque_cli.wait_for_service(timeout_sec=2.0):
+        raise RuntimeError("Torque service is unavailable")
+    req = SetBool.Request()
+    req.data = False
+    wait_for_future(node.torque_cli.call_async(req), 2.0)
+    print("Torque released.")
 
     root = dataset_root(args.repo_id)
     dataset = open_or_create_dataset(args.repo_id, root, args.fps)
@@ -270,11 +271,7 @@ def main():
                 print(f" failed ({exc})")
 
         print(f"Dataset: {root} ({dataset.num_episodes} episodes, {dataset.num_frames} frames)")
-        node.destroy_node()
-        try:
-            rclpy.shutdown()
-        except Exception:
-            pass
+        shutdown_background_node(node, spin_thread)
 
 
 if __name__ == "__main__":

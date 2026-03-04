@@ -46,7 +46,6 @@ packages = ["."]
 esp = "esp:main"
 arm = "nodes.arm:main"
 cam = "nodes.cam:main"
-cmd = "nodes.cmd:main"
 record = "nodes.record:main"
 replay = "nodes.replay:main"
 monitor = "nodes.monitor:main"

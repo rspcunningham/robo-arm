@@ -19,8 +19,8 @@ from nodes._util import (
     ArmCommander,
     dataset_root,
     pull_dataset,
+    shutdown_background_node,
     spin_in_background,
-    shutdown_and_exit,
 )
 
 
@@ -74,7 +74,7 @@ def main():
 
     rclpy.init()
     node = ReplayNode()
-    spin_in_background(node)
+    spin_thread = spin_in_background(node)
 
     print("Connecting...", end="", flush=True)
     while node.arm_pub.get_subscription_count() == 0:
@@ -99,7 +99,7 @@ def main():
         node.emergency_stop()
         print("\nAborted - emergency stop sent")
 
-    shutdown_and_exit(node)
+    shutdown_background_node(node, spin_thread)
 
 
 if __name__ == "__main__":

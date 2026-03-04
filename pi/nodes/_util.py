@@ -1,7 +1,7 @@
 """Shared helpers for robot nodes."""
 
-import os
 import threading
+import time
 from pathlib import Path
 
 import rclpy
@@ -79,7 +79,7 @@ def run_node(node: Node):
 
 
 def spin_in_background(node: Node):
-    """Daemon-thread spin with ExternalShutdownException catch. For ephemeral tools."""
+    """Background spin thread with ExternalShutdownException catch."""
     def _spin():
         try:
             rclpy.spin(node)
@@ -94,14 +94,27 @@ def spin_in_background(node: Node):
     return thread
 
 
-def shutdown_and_exit(node: Node):
-    """destroy_node + rclpy.shutdown + os._exit(0). For ephemeral tools."""
-    node.destroy_node()
+def wait_for_future(future, timeout_sec: float):
+    """Wait for a ROS future while another thread spins the node."""
+    deadline = time.monotonic() + timeout_sec
+    while not future.done():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Timed out waiting for ROS future")
+        time.sleep(0.01)
+    return future.result()
+
+
+def shutdown_background_node(node: Node, spin_thread: threading.Thread, join_timeout_sec: float = 3.0):
+    """Shutdown ROS, wait for the spin thread to stop, then destroy the node."""
     try:
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
     except Exception:
         pass
-    os._exit(0)
+    spin_thread.join(timeout=join_timeout_sec)
+    if spin_thread.is_alive():
+        raise RuntimeError("ROS spin thread did not exit cleanly")
+    node.destroy_node()
 
 
 class ArmCommander:
@@ -118,6 +131,8 @@ class ArmCommander:
             msg.velocity = [spd]
         publish_or_ignore_shutdown(self.arm_pub, msg)
 
-    def emergency_stop(self):
-        if self.estop_cli.wait_for_service(timeout_sec=1.0):
-            self.estop_cli.call_async(Trigger.Request())
+    def emergency_stop(self, timeout_sec: float = 1.0):
+        if not self.estop_cli.wait_for_service(timeout_sec=timeout_sec):
+            raise RuntimeError("Emergency stop service is unavailable")
+        future = self.estop_cli.call_async(Trigger.Request())
+        return wait_for_future(future, timeout_sec)

@@ -18,7 +18,7 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, JointState
 from std_msgs.msg import String
 
-from nodes._util import JOINT_NAMES, spin_in_background
+from nodes._util import JOINT_NAMES, shutdown_background_node, spin_in_background
 
 HTML_PAGE = """\
 <!DOCTYPE html>
@@ -597,17 +597,13 @@ async def _start_ros(app):
     loop = asyncio.get_running_loop()
     rclpy.init()
     node = MonitorNode(loop)
-    spin_in_background(node)
+    app["spin_thread"] = spin_in_background(node)
     app["node"] = node
     node.get_logger().info("Monitor node ready")
 
 
 async def _stop_ros(app):
-    app["node"].destroy_node()
-    try:
-        rclpy.shutdown()
-    except Exception:
-        pass
+    shutdown_background_node(app["node"], app["spin_thread"])
 
 
 def main():

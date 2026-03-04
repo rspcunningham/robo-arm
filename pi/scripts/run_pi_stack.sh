@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DISABLE_CAM="${DISABLE_CAM:-0}"
 ENABLE_MONITOR="${ENABLE_MONITOR:-1}"
 ROBO_ARM_MONITOR_PORT="${ROBO_ARM_MONITOR_PORT:-8080}"
 ROS_SETUP_BASH="${ROS_SETUP_BASH:-}"
@@ -39,8 +38,13 @@ set -u
 cd "${PROJECT_ROOT}"
 VENV_BIN="${PROJECT_ROOT}/.venv/bin"
 
-if [[ ! -x "${VENV_BIN}/arm" || ! -x "${VENV_BIN}/monitor" ]]; then
+if [[ ! -x "${VENV_BIN}/arm" || ! -x "${VENV_BIN}/cam" ]]; then
   echo "[err] Missing venv entrypoints under ${VENV_BIN}. Run 'uv sync --project pi' first." >&2
+  exit 1
+fi
+
+if [[ "${ENABLE_MONITOR}" == "1" && ! -x "${VENV_BIN}/monitor" ]]; then
+  echo "[err] Missing ${VENV_BIN}/monitor. Run 'uv sync --project pi' first." >&2
   exit 1
 fi
 
@@ -87,14 +91,8 @@ trap cleanup EXIT INT TERM
 "${VENV_BIN}/arm" &
 pids+=("$!")
 
-if [[ "${DISABLE_CAM}" != "1" ]]; then
-  if [[ ! -x "${VENV_BIN}/cam" ]]; then
-    echo "[err] Missing ${VENV_BIN}/cam. Run 'uv sync --project pi' first." >&2
-    exit 1
-  fi
-  "${VENV_BIN}/cam" &
-  pids+=("$!")
-fi
+"${VENV_BIN}/cam" &
+pids+=("$!")
 
 if [[ "${ENABLE_MONITOR}" == "1" ]]; then
   "${VENV_BIN}/monitor" --port "${ROBO_ARM_MONITOR_PORT}" &

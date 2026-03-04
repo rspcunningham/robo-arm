@@ -23,8 +23,6 @@ uv sync
 ./scripts/run_pi_stack.sh
 ```
 
-Set `DISABLE_CAM=1` to start without the camera node.
-
 ## Install as a service on the Pi
 
 ```bash
