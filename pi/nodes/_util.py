@@ -13,6 +13,22 @@ JOINT_NAMES = ["base", "shoulder", "elbow", "hand"]
 HF_DATASET_PATTERNS = ["data/**", "meta/**"]
 
 
+def _is_shutdown_publish_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (not rclpy.ok()) or "context is invalid" in message
+
+
+def publish_or_ignore_shutdown(publisher, msg) -> bool:
+    """Publish unless ROS is shutting down; suppress invalid-context shutdown races."""
+    try:
+        publisher.publish(msg)
+    except Exception as exc:
+        if _is_shutdown_publish_error(exc):
+            return False
+        raise
+    return True
+
+
 def dataset_root(repo_id: str) -> Path:
     """Local working copy for a dataset repo id."""
     return Path.home() / "data" / "lerobot" / repo_id
@@ -53,6 +69,9 @@ def run_node(node: Node):
         rclpy.spin(node)
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
+    except Exception as exc:
+        if not _is_shutdown_publish_error(exc):
+            raise
     finally:
         node.destroy_node()
         if rclpy.ok():
@@ -66,6 +85,9 @@ def spin_in_background(node: Node):
             rclpy.spin(node)
         except rclpy.executors.ExternalShutdownException:
             pass
+        except Exception as exc:
+            if not _is_shutdown_publish_error(exc):
+                raise
 
     thread = threading.Thread(target=_spin, daemon=True)
     thread.start()
@@ -94,7 +116,7 @@ class ArmCommander:
         msg.position = pos
         if spd is not None:
             msg.velocity = [spd]
-        self.arm_pub.publish(msg)
+        publish_or_ignore_shutdown(self.arm_pub, msg)
 
     def emergency_stop(self):
         if self.estop_cli.wait_for_service(timeout_sec=1.0):

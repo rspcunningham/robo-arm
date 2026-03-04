@@ -17,7 +17,7 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 
-from nodes._util import run_node
+from nodes._util import publish_or_ignore_shutdown, run_node
 
 CMD_NOP = 0x00
 CMD_GET_HEADER = 0x01
@@ -248,7 +248,7 @@ class CamNode(Node):
     def _publish_health(self):
         msg = String()
         msg.data = json.dumps(self._health_snapshot())
-        self.health_pub.publish(msg)
+        publish_or_ignore_shutdown(self.health_pub, msg)
 
     def _reader_loop(self):
         failures = 0
@@ -271,12 +271,8 @@ class CamNode(Node):
             msg.data = frame
             if not self._running or not rclpy.ok():
                 break
-            try:
-                self.pub.publish(msg)
-            except Exception:
-                if not self._running or not rclpy.ok():
-                    break
-                raise
+            if not publish_or_ignore_shutdown(self.pub, msg):
+                break
 
     def destroy_node(self):
         self._running = False

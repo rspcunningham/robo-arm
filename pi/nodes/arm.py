@@ -13,7 +13,7 @@ from sensor_msgs.msg import JointState
 from std_srvs.srv import SetBool, Trigger
 import serial
 
-from nodes._util import JOINT_NAMES, run_node
+from nodes._util import JOINT_NAMES, publish_or_ignore_shutdown, run_node
 
 
 class ArmNode(Node):
@@ -85,7 +85,7 @@ class ArmNode(Node):
             float(data.get("torE", 0)),
             float(data.get("torH", 0)),
         ]
-        self.pub.publish(msg)
+        publish_or_ignore_shutdown(self.pub, msg)
 
     def _on_command(self, msg: JointState):
         if len(msg.position) < 4:

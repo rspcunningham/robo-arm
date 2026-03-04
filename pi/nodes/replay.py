@@ -1,17 +1,15 @@
-"""Replay a recorded episode from a LeRobot-compatible dataset.
+"""Replay a recorded episode from a LeRobot dataset.
 
 Usage:
     uv run replay --repo-id my-org/demos --episode 0
 
-Pulls the latest dataset revision, then reads directly from parquet.
-Uses daemon-thread spin so launch.py does NOT auto-detect this as a node.
+Pulls the latest dataset revision, then reads actions via LeRobotDataset so the
+replay path matches the sharded LeRobot v3 on-disk layout.
 """
 
 import argparse
-import json
 import time
 
-import pyarrow.parquet as pq
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -26,17 +24,21 @@ from nodes._util import (
 )
 
 
+def get_lerobot_dataset_cls():
+    try:
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    except ImportError as exc:
+        raise RuntimeError(
+            "The replay command now uses LeRobotDataset. Install `lerobot>=0.4.4,<0.5` first."
+        ) from exc
+    return LeRobotDataset
+
+
 class ReplayNode(ArmCommander, Node):
     def __init__(self):
         super().__init__("replay")
         self.arm_pub = self.create_publisher(JointState, "/joint_commands", 10)
         self.estop_cli = self.create_client(Trigger, "/emergency_stop")
-
-
-def episode_data_path(root, episode_index: int, chunk_size: int):
-    chunk_idx = episode_index // chunk_size
-    file_idx = episode_index % chunk_size
-    return root / "data" / f"chunk-{chunk_idx:03d}" / f"file-{file_idx:03d}.parquet"
 
 
 def main():
@@ -52,31 +54,23 @@ def main():
         print(" ok.")
     except Exception as exc:
         print(f" skipped ({exc})")
-    if not (root / "meta" / "info.json").exists():
-        print(f"Dataset metadata not found in {root}")
-        return
-    with open(root / "meta" / "info.json") as f:
-        info = json.load(f)
-    fps = info["fps"]
-    chunk_size = int(info.get("chunks_size", 1000))
 
-    # New layout: one parquet file per episode. Fall back to the legacy monolithic file.
-    data_path = episode_data_path(root, args.episode, chunk_size)
-    if data_path.exists():
-        table = pq.read_table(data_path)
-        actions = table.column("action").to_pylist()
-    else:
-        legacy_data_path = root / "data" / "chunk-000" / "file-000.parquet"
-        if not legacy_data_path.exists():
-            print(f"Episode {args.episode} not found in {root}")
-            return
-        table = pq.read_table(legacy_data_path)
-        ep_col = table.column("episode_index").to_pylist()
-        action_col = table.column("action").to_pylist()
-        actions = [action_col[i] for i, ep in enumerate(ep_col) if ep == args.episode]
-        if not actions:
-            print(f"Episode {args.episode} not found in {root}")
-            return
+    try:
+        LeRobotDataset = get_lerobot_dataset_cls()
+        dataset = LeRobotDataset(
+            args.repo_id,
+            root=root,
+            episodes=[args.episode],
+            download_videos=False,
+        )
+    except Exception as exc:
+        print(f"Failed to open episode {args.episode}: {exc}")
+        return
+
+    actions = [dataset[i]["action"] for i in range(len(dataset))]
+    if not actions:
+        print(f"Episode {args.episode} not found in {root}")
+        return
 
     rclpy.init()
     node = ReplayNode()
@@ -87,14 +81,15 @@ def main():
         time.sleep(0.1)
     print(" ready.")
 
-    interval = 1.0 / fps
+    interval = 1.0 / dataset.fps
     total = len(actions)
-    print(f"Replaying episode {args.episode} ({total} frames at {fps} fps)")
+    print(f"Replaying episode {args.episode} ({total} frames at {dataset.fps} fps)")
 
     try:
         for i, action in enumerate(actions):
             t0 = time.time()
-            node.publish_move(list(action))
+            move = action.tolist() if hasattr(action, "tolist") else list(action)
+            node.publish_move(move)
             print(f"\r  frame {i + 1}/{total}", end="", flush=True)
             elapsed = time.time() - t0
             if elapsed < interval:
@@ -102,7 +97,7 @@ def main():
         print("\nDone")
     except KeyboardInterrupt:
         node.emergency_stop()
-        print("\nAborted — emergency stop sent")
+        print("\nAborted - emergency stop sent")
 
     shutdown_and_exit(node)
 

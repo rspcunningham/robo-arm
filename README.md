@@ -53,7 +53,7 @@ From the repo root:
 ./scripts/deploy_pi.sh
 ```
 
-This syncs the repo to the Pi, runs `uv sync --project pi --frozen`, and restarts `robo-arm.service` if installed.
+This syncs only `./pi` to the Pi, runs `uv sync --project pi --frozen`, and restarts `robo-arm.service` if installed.
 
 Defaults:
 
@@ -65,6 +65,17 @@ Override them inline when needed:
 ```bash
 PI_HOST=pi@192.168.1.50 PI_DIR=/home/pi/code ./scripts/deploy_pi.sh
 ```
+
+## Run transient Pi tasks
+
+Run one-off Pi-side ROS 2 tools from the Mac:
+
+```bash
+./scripts/record_pi.sh --repo-id my-org/demos --fps 10 --task "pick up block" --num-episodes 1
+./scripts/replay_pi.sh --repo-id my-org/demos --episode 0
+```
+
+These SSH into the Pi, source ROS 2, enter `pi/`, and run the installed `record` or `replay` entrypoint against the always-on `robo-arm.service` runtime.
 
 ## Notes
 

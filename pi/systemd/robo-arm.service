@@ -11,6 +11,8 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=__REPO_ROOT__/pi/scripts/run_pi_stack.sh
 Restart=on-failure
 RestartSec=2
+TimeoutStopSec=3
+SuccessExitStatus=143 SIGTERM
 
 [Install]
 WantedBy=multi-user.target

@@ -5,7 +5,7 @@ DISABLE_CAM="${DISABLE_CAM:-0}"
 ENABLE_MONITOR="${ENABLE_MONITOR:-1}"
 ROBO_ARM_MONITOR_PORT="${ROBO_ARM_MONITOR_PORT:-8080}"
 ROS_SETUP_BASH="${ROS_SETUP_BASH:-}"
-UV_BIN="${UV_BIN:-}"
+CLEANUP_TIMEOUT_SEC="${CLEANUP_TIMEOUT_SEC:-2}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -36,45 +36,68 @@ set +u
 source "${ROS_SETUP_BASH}"
 set -u
 
-if [[ -z "${UV_BIN}" ]]; then
-  if command -v uv >/dev/null 2>&1; then
-    UV_BIN="$(command -v uv)"
-  elif [[ -n "${HOME:-}" && -x "${HOME}/.local/bin/uv" ]]; then
-    UV_BIN="${HOME}/.local/bin/uv"
-  elif [[ -x "/home/pi/.local/bin/uv" ]]; then
-    UV_BIN="/home/pi/.local/bin/uv"
-  else
-    echo "[err] Could not find uv. Set UV_BIN explicitly." >&2
-    exit 1
-  fi
-fi
-
 cd "${PROJECT_ROOT}"
+VENV_BIN="${PROJECT_ROOT}/.venv/bin"
+
+if [[ ! -x "${VENV_BIN}/arm" || ! -x "${VENV_BIN}/monitor" ]]; then
+  echo "[err] Missing venv entrypoints under ${VENV_BIN}. Run 'uv sync --project pi' first." >&2
+  exit 1
+fi
 
 pids=()
 
 cleanup() {
   local pid
+  local attempt
+  local remaining
+  local max_attempts=$(( CLEANUP_TIMEOUT_SEC * 10 ))
+
   for pid in "${pids[@]:-}"; do
     if kill -0 "${pid}" >/dev/null 2>&1; then
       kill "${pid}" >/dev/null 2>&1 || true
     fi
   done
+
+  for ((attempt = 0; attempt < max_attempts; attempt++)); do
+    remaining=0
+    for pid in "${pids[@]:-}"; do
+      if kill -0 "${pid}" >/dev/null 2>&1; then
+        remaining=1
+        break
+      fi
+    done
+    if [[ "${remaining}" == "0" ]]; then
+      wait "${pids[@]:-}" 2>/dev/null || true
+      return
+    fi
+    sleep 0.1
+  done
+
+  for pid in "${pids[@]:-}"; do
+    if kill -0 "${pid}" >/dev/null 2>&1; then
+      kill -9 "${pid}" >/dev/null 2>&1 || true
+    fi
+  done
+
   wait "${pids[@]:-}" 2>/dev/null || true
 }
 
 trap cleanup EXIT INT TERM
 
-"${UV_BIN}" run --project "${PROJECT_ROOT}" arm &
+"${VENV_BIN}/arm" &
 pids+=("$!")
 
 if [[ "${DISABLE_CAM}" != "1" ]]; then
-  "${UV_BIN}" run --project "${PROJECT_ROOT}" cam &
+  if [[ ! -x "${VENV_BIN}/cam" ]]; then
+    echo "[err] Missing ${VENV_BIN}/cam. Run 'uv sync --project pi' first." >&2
+    exit 1
+  fi
+  "${VENV_BIN}/cam" &
   pids+=("$!")
 fi
 
 if [[ "${ENABLE_MONITOR}" == "1" ]]; then
-  "${UV_BIN}" run --project "${PROJECT_ROOT}" monitor --port "${ROBO_ARM_MONITOR_PORT}" &
+  "${VENV_BIN}/monitor" --port "${ROBO_ARM_MONITOR_PORT}" &
   pids+=("$!")
 fi
 

@@ -5,23 +5,35 @@ description = "Raspberry Pi runtime for the robo-arm project"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "aiohttp",
-    "RPi.GPIO",
+    "aiohttp>=3.13.3",
     "datasets>=4.0.0",
-    "esptool",
+    "esptool>=5.2.0",
     "huggingface_hub>=0.35.3",
+    "lerobot>=0.4.4,<0.5",
     "numpy>=2.4.2",
-    "pandas",
+    "pandas>=3.0.1",
     "platformio>=6.1.19",
-    "pillow",
-    "pyarrow",
-    "pyserial",
-    "spidev",
+    "pillow>=12.1.1",
+    "pyarrow>=23.0.1",
+    "pyserial>=3.5",
+    "RPi.GPIO>=0.7.1; platform_system == 'Linux' and (platform_machine == 'aarch64' or platform_machine == 'armv7l' or platform_machine == 'armv6l')",
+    "spidev>=3.8; platform_system == 'Linux'",
+    "torch==2.6.0",
+    "torchvision==0.21.0",
 ]
 
 [tool.uv]
 package = true
 python-preference = "only-system"
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "platform_system == 'Linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "platform_system == 'Linux' and platform_machine == 'x86_64'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
