@@ -38,7 +38,10 @@ async def predict(request: PredictRequest):
     action = list(request.joint_state.position[:4])
     if len(action) < 4:
         action.extend([0.0] * (4 - len(action)))
-    return PredictResponse(action=action)
+
+    new_action = [0.0, 0.0, 0.0, 0.0]
+
+    return PredictResponse(action=new_action)
 
 
 def main():
