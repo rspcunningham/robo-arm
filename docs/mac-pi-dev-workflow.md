@@ -9,12 +9,14 @@ Keep one repo, develop from the Mac, deploy the hardware-facing runtime to the R
 The repo now uses sibling projects:
 
 - [pi/](/Users/robin/Desktop/robo-arm/pi): Raspberry Pi runtime project
+- [policy_server/](/Users/robin/Desktop/robo-arm/policy_server): Mac/cloud policy inference service
 - [experiments/](/Users/robin/Desktop/robo-arm/experiments): Mac-only experiments project
 
 The Pi project contains the existing robot runtime:
 
 - [pi/nodes/arm.py](/Users/robin/Desktop/robo-arm/pi/nodes/arm.py): serial driver for the arm
 - [pi/nodes/cam.py](/Users/robin/Desktop/robo-arm/pi/nodes/cam.py): SPI camera bridge
+- [pi/nodes/policy_client.py](/Users/robin/Desktop/robo-arm/pi/nodes/policy_client.py): remote policy client
 - [pi/nodes/monitor.py](/Users/robin/Desktop/robo-arm/pi/nodes/monitor.py): browser monitor
 - [pi/nodes/record.py](/Users/robin/Desktop/robo-arm/pi/nodes/record.py): dataset recording
 - [pi/nodes/replay.py](/Users/robin/Desktop/robo-arm/pi/nodes/replay.py): dataset replay

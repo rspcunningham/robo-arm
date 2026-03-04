@@ -1,4 +1,4 @@
-"""Web monitor for robot camera + joint telemetry.
+"""Web monitor for robot camera, telemetry, and policy control.
 
 Streams live camera view and joint data to any browser on the local network.
 Uses daemon-thread spin so launch.py does NOT auto-detect this as a node.
@@ -17,8 +17,14 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, JointState
 from std_msgs.msg import String
+from std_srvs.srv import SetBool
 
-from nodes._util import JOINT_NAMES, shutdown_background_node, spin_in_background
+from nodes._util import (
+    JOINT_NAMES,
+    shutdown_background_node,
+    spin_in_background,
+    wait_for_future,
+)
 
 HTML_PAGE = """\
 <!DOCTYPE html>
@@ -243,6 +249,35 @@ HTML_PAGE = """\
     font-size: 0.8rem;
     line-height: 1.35;
   }
+  .control-row {
+    margin-top: 10px;
+    display: flex;
+    gap: 8px;
+  }
+  .control-button {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    color: var(--text);
+    background: #1a2330;
+    cursor: pointer;
+    font: 600 0.72rem/1 "SFMono-Regular", "Menlo", monospace;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .control-button.primary {
+    background: #17311f;
+    border-color: #275d34;
+  }
+  .control-button.secondary {
+    background: #341616;
+    border-color: #5a2b2b;
+  }
+  .control-button:disabled {
+    opacity: 0.55;
+    cursor: wait;
+  }
   .footer {
     margin-top: 2px;
     color: var(--muted);
@@ -279,7 +314,7 @@ HTML_PAGE = """\
     <div>
       <div class="eyebrow">Pi Telemetry</div>
       <h1>Robot Monitor</h1>
-      <p class="subhead">Live camera and joint telemetry for bench inspection.</p>
+      <p class="subhead">Live camera, joint telemetry, and local policy control.</p>
     </div>
     <div id="status-pill" class="status-pill">Awaiting stream</div>
   </section>
@@ -327,6 +362,18 @@ HTML_PAGE = """\
 
       <div class="summary-group">
         <div class="summary-row">
+          <div class="summary-label">Policy</div>
+          <div class="summary-value" id="policy-state">Disabled</div>
+        </div>
+        <div class="summary-meta" id="policy-meta">Local policy control is off</div>
+        <div class="control-row">
+          <button id="policy-enable" class="control-button primary" type="button">Enable</button>
+          <button id="policy-disable" class="control-button secondary" type="button">Disable</button>
+        </div>
+      </div>
+
+      <div class="summary-group">
+        <div class="summary-row">
           <div class="summary-label">SPI Recoveries / Min</div>
           <div class="summary-value" id="spi-rate">0</div>
         </div>
@@ -368,6 +415,10 @@ const spiRateMeta = document.getElementById('spi-rate-meta');
 const spiTotal = document.getElementById('spi-total');
 const spiLast = document.getElementById('spi-last');
 const spiLastMeta = document.getElementById('spi-last-meta');
+const policyState = document.getElementById('policy-state');
+const policyMeta = document.getElementById('policy-meta');
+const policyEnableBtn = document.getElementById('policy-enable');
+const policyDisableBtn = document.getElementById('policy-disable');
 
 JOINTS.forEach(name => {
   let row = posTable.insertRow();
@@ -380,6 +431,8 @@ const cam = document.getElementById('cam');
 let prevUrl = null;
 let lastFrameAt = 0;
 let lastEvent = 0;
+let policyBusy = false;
+let latestPolicy = null;
 
 function formatAge(seconds) {
   if (seconds == null) return 'Never';
@@ -399,6 +452,71 @@ function setConnectionState(label, className, footer) {
   footerStatus.textContent = footer;
 }
 
+function setPolicyButtonsState() {
+  policyEnableBtn.disabled = policyBusy || (latestPolicy?.enabled ?? false);
+  policyDisableBtn.disabled = policyBusy || !(latestPolicy?.enabled ?? false);
+}
+
+function renderPolicy() {
+  const policy = latestPolicy || {
+    enabled: false,
+    request_in_flight: false,
+    server_reachable: null,
+    last_success_unix_sec: null,
+    last_error: null,
+  };
+
+  policyState.textContent = policy.enabled ? 'Enabled' : 'Disabled';
+
+  if (!policy.enabled) {
+    policyMeta.textContent = 'Local policy control is off';
+  } else if (policy.server_reachable === false) {
+    policyMeta.textContent = policy.last_error
+      ? `Server unreachable · ${policy.last_error}`
+      : 'Server unreachable';
+  } else if (policy.server_reachable === true) {
+    if (policy.last_success_unix_sec == null) {
+      policyMeta.textContent = 'Server reachable';
+    } else {
+      const ageSec = Math.max(0, (Date.now() / 1000) - policy.last_success_unix_sec);
+      const prefix = policy.request_in_flight ? 'Polling server' : 'Server reachable';
+      policyMeta.textContent = `${prefix} · last success ${formatAge(ageSec)} ago`;
+    }
+  } else if (policy.request_in_flight) {
+    policyMeta.textContent = 'Waiting for first policy response';
+  } else {
+    policyMeta.textContent = 'Policy enabled · waiting for observations';
+  }
+
+  setPolicyButtonsState();
+}
+
+async function setPolicyEnabled(enabled) {
+  policyBusy = true;
+  setPolicyButtonsState();
+  try {
+    const response = await fetch(enabled ? '/api/policy/enable' : '/api/policy/disable', {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    footerStatus.textContent = `Policy toggle failed: ${error.message}`;
+  } finally {
+    policyBusy = false;
+    setPolicyButtonsState();
+  }
+}
+
+policyEnableBtn.addEventListener('click', () => {
+  setPolicyEnabled(true);
+});
+policyDisableBtn.addEventListener('click', () => {
+  setPolicyEnabled(false);
+});
+
 function refreshDerivedState() {
   const now = Date.now();
   const frameAgeMs = lastFrameAt ? now - lastFrameAt : null;
@@ -416,6 +534,8 @@ function refreshDerivedState() {
     streamState.textContent = 'Stale';
     streamMeta.textContent = 'Joint telemetry has paused';
   }
+
+  renderPolicy();
 }
 
 async function streamVideo() {
@@ -486,6 +606,8 @@ es.onmessage = event => {
     spiLastMeta.textContent = `Last reset was ${formatAge(ageSec)} ago`;
   }
 
+  latestPolicy = data.policy || latestPolicy;
+
   refreshDerivedState();
 };
 es.onerror = () => {
@@ -513,6 +635,15 @@ class MonitorNode(Node):
             "recoveries_last_minute": 0,
             "last_recovery_age_sec": None,
         }
+        self.last_policy_status = {
+            "enabled": False,
+            "request_in_flight": False,
+            "server_reachable": None,
+            "last_success_unix_sec": None,
+            "last_error": None,
+            "policy_url": None,
+        }
+        self.policy_enable_cli = self.create_client(SetBool, "/policy_enable")
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -528,6 +659,9 @@ class MonitorNode(Node):
         self.create_subscription(
             String, "/camera/spi_health", self._on_spi_health, 10,
         )
+        self.create_subscription(
+            String, "/policy/status", self._on_policy_status, 10,
+        )
 
     def _notify(self):
         self._loop.call_soon_threadsafe(self.state_event.set)
@@ -536,6 +670,7 @@ class MonitorNode(Node):
         return {
             "joints": self.last_joints,
             "spi_health": self.last_spi_health,
+            "policy": self.last_policy_status,
         }
 
     def _on_image(self, msg: CompressedImage):
@@ -558,6 +693,21 @@ class MonitorNode(Node):
             "recoveries_total": int(payload.get("recoveries_total", 0)),
             "recoveries_last_minute": int(payload.get("recoveries_last_minute", 0)),
             "last_recovery_age_sec": payload.get("last_recovery_age_sec"),
+        }
+        self._notify()
+
+    def _on_policy_status(self, msg: String):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        self.last_policy_status = {
+            "enabled": bool(payload.get("enabled", False)),
+            "request_in_flight": bool(payload.get("request_in_flight", False)),
+            "server_reachable": payload.get("server_reachable"),
+            "last_success_unix_sec": payload.get("last_success_unix_sec"),
+            "last_error": payload.get("last_error"),
+            "policy_url": payload.get("policy_url"),
         }
         self._notify()
 
@@ -593,6 +743,39 @@ async def handle_events(request):
     return resp
 
 
+async def _set_policy_enabled(request, enabled: bool):
+    node = request.app["node"]
+    if not await asyncio.to_thread(node.policy_enable_cli.wait_for_service, 1.0):
+        return web.json_response(
+            {"error": "Policy toggle service unavailable"},
+            status=503,
+        )
+
+    req = SetBool.Request()
+    req.data = enabled
+    future = node.policy_enable_cli.call_async(req)
+
+    try:
+        result = await asyncio.to_thread(wait_for_future, future, 2.0)
+    except TimeoutError as exc:
+        return web.json_response({"error": str(exc)}, status=504)
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+
+    if not result.success:
+        return web.json_response({"error": result.message or "Policy toggle failed"}, status=500)
+
+    return web.json_response({"ok": True, "enabled": enabled})
+
+
+async def handle_policy_enable(request):
+    return await _set_policy_enabled(request, True)
+
+
+async def handle_policy_disable(request):
+    return await _set_policy_enabled(request, False)
+
+
 async def _start_ros(app):
     loop = asyncio.get_running_loop()
     rclpy.init()
@@ -617,6 +800,8 @@ def main():
     app.router.add_get("/", handle_index)
     app.router.add_get("/snapshot", handle_snapshot)
     app.router.add_get("/events", handle_events)
+    app.router.add_post("/api/policy/enable", handle_policy_enable)
+    app.router.add_post("/api/policy/disable", handle_policy_disable)
 
     web.run_app(
         app,

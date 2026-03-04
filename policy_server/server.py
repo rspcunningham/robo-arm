@@ -1,0 +1,54 @@
+"""HTTP policy server for the robo-arm project."""
+
+import argparse
+
+import uvicorn
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+
+
+class JointStatePayload(BaseModel):
+    name: list[str] = Field(default_factory=list)
+    position: list[float] = Field(default_factory=list)
+    effort: list[float] = Field(default_factory=list)
+
+
+class PredictRequest(BaseModel):
+    image_jpeg_b64: str
+    joint_state: JointStatePayload
+
+
+class PredictResponse(BaseModel):
+    action: list[float]
+
+
+app = FastAPI()
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True}
+
+
+@app.post("/predict", response_model=PredictResponse)
+async def predict(request: PredictRequest):
+    # The initial policy is intentionally inert: it just returns the current
+    # joint positions so the Pi-side client/server transport can be validated
+    # before any learned or scripted behavior is introduced.
+    action = list(request.joint_state.position[:4])
+    if len(action) < 4:
+        action.extend([0.0] * (4 - len(action)))
+    return PredictResponse(action=action)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run the robo-arm policy server")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")
+    args = parser.parse_args()
+
+    uvicorn.run(app, host=args.host, port=args.port)
+
+
+if __name__ == "__main__":
+    main()

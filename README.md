@@ -3,6 +3,7 @@
 This repo now contains sibling projects:
 
 - `pi/`: the Raspberry Pi runtime project
+- `policy_server/`: the Mac/cloud policy inference service
 - `experiments/`: the Mac-only project for local experiments
 
 Use the repo root as the shared container for source control, docs, and deploy helpers.
@@ -34,6 +35,24 @@ cd pi
 ./scripts/install_pi_service.sh
 ```
 
+Set `ROBO_ARM_POLICY_URL` before starting the Pi runtime when the policy server is
+running on another machine:
+
+```bash
+cd pi
+ROBO_ARM_POLICY_URL=http://macbook.local:8000/predict ./scripts/run_pi_stack.sh
+```
+
+## Policy server
+
+Run the policy service on your Mac (or any reachable host):
+
+```bash
+cd policy_server
+uv sync
+uv run policy-server --host 0.0.0.0 --port 8000
+```
+
 ## Mac experiments
 
 Use [experiments/](/Users/robin/Desktop/robo-arm/experiments) for Mac-only dependencies and scripts.
@@ -54,6 +73,13 @@ From the repo root:
 ```
 
 This syncs only `./pi` to the Pi, runs `uv sync --project pi --frozen`, and restarts `robo-arm.service` if installed.
+
+Set `ROBO_ARM_POLICY_URL` inline on the Mac before deploy when the Pi should
+call a policy server running somewhere else:
+
+```bash
+ROBO_ARM_POLICY_URL=http://Robins-MacBook-Pro.local:8000/predict ./scripts/deploy_pi.sh
+```
 
 Defaults:
 

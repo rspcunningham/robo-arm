@@ -46,6 +46,7 @@ packages = ["."]
 esp = "esp:main"
 arm = "nodes.arm:main"
 cam = "nodes.cam:main"
+policy-client = "nodes.policy_client:main"
 record = "nodes.record:main"
 replay = "nodes.replay:main"
 monitor = "nodes.monitor:main"
