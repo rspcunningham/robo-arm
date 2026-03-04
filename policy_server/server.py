@@ -32,12 +32,8 @@ async def healthz():
 
 @app.post("/predict", response_model=PredictResponse)
 async def predict(request: PredictRequest):
-    # The initial policy is intentionally inert: it just returns the current
-    # joint positions so the Pi-side client/server transport can be validated
-    # before any learned or scripted behavior is introduced.
-    action = list(request.joint_state.position[:4])
-    if len(action) < 4:
-        action.extend([0.0] * (4 - len(action)))
+    positions = request.joint_state.position
+    torques = request.joint_state.effort
 
     new_action = [0.0, 0.0, 0.0, 0.0]
 
