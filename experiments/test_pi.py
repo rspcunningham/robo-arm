@@ -1,89 +1,137 @@
 import torch
+from typing import Callable, cast
+
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_pre_post_processors
-
-# Swap this import per-policy
 from lerobot.policies.pi05 import PI05Policy
 
-model_id = "lerobot/pi05_base"
-dataset_id = "rspcunningham/test"
-episode_index = 0
-device = torch.device("mps")
+MODEL_ID = "lerobot/pi05_base"
+DATASET_ID = "rspcunningham/test"
+EPISODE_INDEX = 0
+VIDEO_BACKEND = "pyav"
+DEVICE = torch.device("mps")
 
-# Optional explicit camera mapping for custom datasets.
-# Format: {"<dataset camera key>": "<policy camera key>"}
-camera_map = {
+# Dataset camera key -> PI0.5 camera key.
+CAMERA_MAP_DATASET_TO_PI = {
     "observation.images.front": "observation.images.base_0_rgb",
 }
 
+# Robot joint index -> PI0.5 joint index.
+ROBOT_TO_PI_JOINT_MAP = {
+    0: 0,
+    1: 1,
+    2: 2,
+    3: 6,
+}
 
-def get_tensor_dim(frame: dict, key: str) -> int | None:
-    value = frame.get(key)
+
+Sample = dict[str, object]
+
+
+def tensor_last_dim(sample: Sample, key: str) -> int | None:
+    value = sample.get(key)
     if isinstance(value, torch.Tensor):
         return value.shape[-1]
     return None
 
 
-def build_camera_mapping(frame: dict, expected_image_keys: list[str], explicit_map: dict[str, str]):
-    available_image_keys = [key for key in frame.keys() if key.startswith("observation.images.")]
-    mapping = {}
-
-    for src_key, dst_key in explicit_map.items():
-        if src_key in frame and dst_key in expected_image_keys:
-            mapping[dst_key] = src_key
-
-    # Fill unmapped policy cameras by position, reusing the last camera if needed.
-    if available_image_keys:
-        for i, dst_key in enumerate(expected_image_keys):
-            if dst_key in mapping:
-                continue
-            src_key = available_image_keys[min(i, len(available_image_keys) - 1)]
-            mapping[dst_key] = src_key
-
-    return mapping, available_image_keys
+def remap_vector_to_target_dim(
+    source: torch.Tensor, target_dim: int, source_to_target_index_map: dict[int, int]
+) -> torch.Tensor:
+    remapped = torch.zeros(*source.shape[:-1], target_dim, dtype=source.dtype, device=source.device)
+    for source_idx, target_idx in source_to_target_index_map.items():
+        if source_idx < source.shape[-1] and target_idx < target_dim:
+            remapped[..., target_idx] = source[..., source_idx]
+    return remapped
 
 
-policy = PI05Policy.from_pretrained(model_id).to(device).eval()
-preprocess, postprocess = make_pre_post_processors(
-    policy.config,
-    model_id,
-    preprocessor_overrides={"device_processor": {"device": str(device)}},
-)
+def remap_pi_to_robot(pi_vector: torch.Tensor, robot_to_pi_index_map: dict[int, int]) -> torch.Tensor:
+    robot_dim = max(robot_to_pi_index_map.keys()) + 1
+    robot_vector = torch.zeros(*pi_vector.shape[:-1], robot_dim, dtype=pi_vector.dtype, device=pi_vector.device)
+    for robot_idx, pi_idx in robot_to_pi_index_map.items():
+        if pi_idx < pi_vector.shape[-1]:
+            robot_vector[..., robot_idx] = pi_vector[..., pi_idx]
+    return robot_vector
 
-# Force pyav backend to avoid torchcodec+pyav FFmpeg dylib collisions on macOS.
-dataset = LeRobotDataset(dataset_id, video_backend="pyav")
 
-from_idx = dataset.meta.episodes["dataset_from_index"][episode_index]
-frame = dict(dataset[from_idx])
+def get_pi_image_keys(policy: PI05Policy) -> list[str]:
+    input_features = policy.config.input_features
+    if input_features is None:
+        return []
+    return [key for key in input_features.keys() if key.startswith("observation.images.")]
 
-expected_image_keys = [
-    key for key in policy.config.input_features.keys() if key.startswith("observation.images.")
-]
-mapping, available_image_keys = build_camera_mapping(frame, expected_image_keys, camera_map)
 
-for dst_key, src_key in mapping.items():
-    frame[dst_key] = frame[src_key]
+def build_camera_mapping(
+    sample: Sample, expected_pi_image_keys: list[str], dataset_to_pi_camera_map: dict[str, str]
+) -> tuple[dict[str, str], list[str]]:
+    available_image_keys = [key for key in sample.keys() if key.startswith("observation.images.")]
+    resolved_mapping: dict[str, str] = {}
+    for dataset_camera_key, pi_camera_key in dataset_to_pi_camera_map.items():
+        if dataset_camera_key in sample and pi_camera_key in expected_pi_image_keys:
+            resolved_mapping[pi_camera_key] = dataset_camera_key
+    return resolved_mapping, available_image_keys
 
-dataset_state_dim = get_tensor_dim(frame, "observation.state")
-dataset_action_dim = get_tensor_dim(frame, "action")
-policy_state_dim = policy.config.max_state_dim
-policy_action_dim = policy.config.max_action_dim
 
-print("dataset:", dataset_id)
-print("dataset image keys:", available_image_keys)
-print("policy image keys:", expected_image_keys)
-print("camera mapping:", mapping)
-print("dataset state/action dims:", dataset_state_dim, dataset_action_dim)
-print("policy state/action dims:", policy_state_dim, policy_action_dim)
-print(
-    "dof mapping note: PI05 pads/truncates action internally to max_action_dim; "
-    "for your own training/eval pipeline, explicitly map joint order and units."
-)
+def main() -> None:
+    policy = PI05Policy.from_pretrained(MODEL_ID).to(DEVICE).eval()  # pyright: ignore[reportUnknownMemberType]
+    preprocess, postprocess = make_pre_post_processors(
+        policy.config,
+        MODEL_ID,
+        preprocessor_overrides={"device_processor": {"device": str(DEVICE)}},
+    )
+    preprocess_fn = cast(Callable[[Sample], dict[str, object]], preprocess)
+    postprocess_fn = cast(Callable[[torch.Tensor], torch.Tensor], postprocess)
 
-batch = preprocess(frame)
-with torch.inference_mode():
-    pred_action = policy.select_action(batch)
-    pred_action = postprocess(pred_action)
+    dataset = LeRobotDataset(DATASET_ID, video_backend=VIDEO_BACKEND)
+    from_idx = cast(int, dataset.meta.episodes["dataset_from_index"][EPISODE_INDEX])
+    sample = cast(Sample, dataset[from_idx])
 
-print("pred_action shape:", tuple(pred_action.shape))
-print("pred_action:", pred_action)
+    expected_pi_image_keys = get_pi_image_keys(policy)
+    camera_mapping, available_dataset_image_keys = build_camera_mapping(
+        sample, expected_pi_image_keys, CAMERA_MAP_DATASET_TO_PI
+    )
+    for pi_camera_key, dataset_camera_key in camera_mapping.items():
+        sample[pi_camera_key] = sample[dataset_camera_key]
+
+    state_dim_raw = tensor_last_dim(sample, "observation.state")
+    action_dim_raw = tensor_last_dim(sample, "action")
+
+    state_tensor = sample.get("observation.state")
+    if isinstance(state_tensor, torch.Tensor):
+        sample["observation.state"] = remap_vector_to_target_dim(
+            state_tensor, policy.config.max_state_dim, ROBOT_TO_PI_JOINT_MAP
+        )
+    action_tensor = sample.get("action")
+    if isinstance(action_tensor, torch.Tensor):
+        sample["action"] = remap_vector_to_target_dim(
+            action_tensor, policy.config.max_action_dim, ROBOT_TO_PI_JOINT_MAP
+        )
+
+    state_dim_mapped = tensor_last_dim(sample, "observation.state")
+    action_dim_mapped = tensor_last_dim(sample, "action")
+
+    print("dataset:", DATASET_ID)
+    print("dataset image keys:", available_dataset_image_keys)
+    print("policy image keys:", expected_pi_image_keys)
+    print("camera mapping:", camera_mapping)
+    print("masked cameras:", [key for key in expected_pi_image_keys if key not in camera_mapping])
+    print("robot->pi joint map:", ROBOT_TO_PI_JOINT_MAP)
+    print("dataset state/action dims (raw):", state_dim_raw, action_dim_raw)
+    print("dataset state/action dims (mapped):", state_dim_mapped, action_dim_mapped)
+    print("policy state/action dims:", policy.config.max_state_dim, policy.config.max_action_dim)
+
+    batch = preprocess_fn(sample)
+    tensor_batch = {key: value for key, value in batch.items() if isinstance(value, torch.Tensor)}
+    with torch.inference_mode():
+        pi_action = policy.select_action(tensor_batch)
+        pi_action = postprocess_fn(pi_action)
+        robot_action = remap_pi_to_robot(pi_action, ROBOT_TO_PI_JOINT_MAP)
+
+    print("pi_action shape:", tuple(pi_action.shape))
+    print("pi_action:", pi_action)
+    print("robot_action shape:", tuple(robot_action.shape))
+    print("robot_action:", robot_action)
+
+
+if __name__ == "__main__":
+    main()
