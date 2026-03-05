@@ -10,6 +10,15 @@ dependencies = [
     "pillow>=10.0.0",
 ]
 
+[project.optional-dependencies]
+rl = [
+    "gymnasium>=1.0.0",
+    "stable-baselines3>=2.3.0",
+    "tensorboard>=2.16.0",
+    "tqdm>=4.66.0",
+    "rich>=13.0.0",
+]
+
 [tool.uv]
 package = true
 python-preference = "only-system"

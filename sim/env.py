@@ -31,8 +31,8 @@ class RoArmSimEnv:
         self.render_width = render_width
         self.render_height = render_height
 
-        # Renderer for camera images
-        self._renderer = mujoco.Renderer(self.model, height=render_height, width=render_width)
+        # Renderer created lazily on first render() call (headless training doesn't need it)
+        self._renderer: mujoco.Renderer | None = None
 
         # Cache joint and actuator indices
         self._joint_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in JOINT_NAMES]
@@ -83,6 +83,8 @@ class RoArmSimEnv:
 
     def render(self) -> np.ndarray:
         """Render and return an RGB numpy array from the sim camera."""
+        if self._renderer is None:
+            self._renderer = mujoco.Renderer(self.model, height=self.render_height, width=self.render_width)
         self._renderer.update_scene(self.data, camera=self._cam_id)
         return self._renderer.render().copy()
 
@@ -100,7 +102,8 @@ class RoArmSimEnv:
 
     def close(self) -> None:
         """Clean up renderer resources."""
-        self._renderer.close()
+        if self._renderer is not None:
+            self._renderer.close()
 
 
 if __name__ == "__main__":
