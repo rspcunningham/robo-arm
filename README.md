@@ -50,7 +50,7 @@ Run the policy service on your Mac (or any reachable host):
 ```bash
 cd policy_server
 uv sync
-uv run policy-server --host 0.0.0.0 --port 8000
+uv run serve-policy policy_demo.py:policy --task "pick up the coffee cup" --host 0.0.0.0 --port 8000
 ```
 
 ## Mac experiments

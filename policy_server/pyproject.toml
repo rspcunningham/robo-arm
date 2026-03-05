@@ -26,3 +26,4 @@ packages = ["."]
 
 [project.scripts]
 policy-server = "server:main"
+serve-policy = "server:main"

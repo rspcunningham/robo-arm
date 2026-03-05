@@ -22,7 +22,7 @@ import mujoco.viewer
 from env import JOINT_NAMES, RoArmSimEnv
 
 DEFAULT_POLICY_URL = "http://127.0.0.1:8000/predict"
-DEFAULT_RATE_HZ = 5.0
+MAX_RATE_HZ = 5.0
 DEFAULT_TIMEOUT_SEC = 2.0
 
 
@@ -120,8 +120,8 @@ def main():
     parser = argparse.ArgumentParser(description="Sim-to-policy-server control loop")
     parser.add_argument("--url", default=DEFAULT_POLICY_URL,
                         help=f"Policy server URL (default: {DEFAULT_POLICY_URL})")
-    parser.add_argument("--rate-hz", type=float, default=DEFAULT_RATE_HZ,
-                        help=f"Control rate in Hz (default: {DEFAULT_RATE_HZ})")
+    parser.add_argument("--rate-hz", type=float, default=MAX_RATE_HZ,
+                        help=f"Control rate in Hz (default: {MAX_RATE_HZ})")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SEC,
                         help=f"HTTP timeout in seconds (default: {DEFAULT_TIMEOUT_SEC})")
     parser.add_argument("--viewer", action="store_true",

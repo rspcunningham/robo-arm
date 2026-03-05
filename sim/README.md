@@ -33,7 +33,7 @@ uv run mjpython demo.py --test-range
 uv run python demo.py --save-image test.png
 
 # Policy loop — connect sim to policy server
-# (start policy server first: cd ../policy_server && uv run policy-server)
+# (start policy server first: cd ../policy_server && uv run serve-policy policy_demo.py:policy --task "pick up the coffee cup")
 uv run python policy_loop.py              # headless
 uv run mjpython policy_loop.py --viewer   # with 3D viewer
 ```
@@ -87,7 +87,7 @@ env.step([0.0, -0.5, 1.0, 0.5])      # command joint positions, advance physics
 positions = env.get_joint_positions()  # [base, shoulder, elbow, hand]
 tcp = env.get_tcp_position()           # [x, y, z] end-effector position
 rgb = env.render()                     # numpy array (480, 640, 3)
-obs = env.observe()                    # {"image_jpeg_b64": ..., "joint_state": ...}
+obs = env.observe()                    # {"images_b64": [...], "joints": [...]}
 
 env.close()
 ```

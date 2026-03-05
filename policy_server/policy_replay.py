@@ -44,8 +44,8 @@ INDEX = 0
 LOCK = threading.Lock()
 
 
-def policy(positions: list[float], torques: list[float]) -> list[float]:
-    del positions, torques
+def policy(images_b64: list[str], joints: list[float], task: str) -> list[float]:
+    del images_b64, joints, task
     global INDEX
     with LOCK:
         if INDEX < len(ACTIONS):

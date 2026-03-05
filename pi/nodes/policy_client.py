@@ -54,7 +54,7 @@ class PolicyClientNode(Node):
 
         self._state_lock = threading.Lock()
         self._last_frame: bytes | None = None
-        self._last_joints: dict | None = None
+        self._last_joints: list[float] | None = None
         self._enabled = False
         self._generation = 0
         self._request_in_flight = False
@@ -63,6 +63,7 @@ class PolicyClientNode(Node):
         self._last_error: str | None = None
         self._last_warning_monotonic = 0.0
         self._last_image_warning_monotonic = 0.0
+        self._last_joints_warning_monotonic = 0.0
 
         self.create_timer(1.0 / rate_hz, self._control_loop)
         self.create_timer(1.0, self._publish_status)
@@ -84,12 +85,28 @@ class PolicyClientNode(Node):
             self._last_frame = frame
 
     def _on_joints(self, msg: JointState):
-        with self._state_lock:
-            self._last_joints = {
-                "name": list(msg.name),
-                "position": list(msg.position),
-                "effort": list(msg.effort),
+        joints: list[float] | None = None
+
+        if msg.name and len(msg.name) == len(msg.position):
+            positions_by_name = {
+                name: float(position)
+                for name, position in zip(msg.name, msg.position, strict=False)
             }
+            if all(name in positions_by_name for name in JOINT_NAMES):
+                joints = [positions_by_name[name] for name in JOINT_NAMES]
+
+        if joints is None and len(msg.position) >= len(JOINT_NAMES):
+            joints = [float(value) for value in msg.position[:len(JOINT_NAMES)]]
+
+        if joints is None:
+            now = time.monotonic()
+            if now - self._last_joints_warning_monotonic >= WARNING_INTERVAL_SEC:
+                self._last_joints_warning_monotonic = now
+                self.get_logger().warning("Dropping joint state with fewer than 4 positions")
+            return
+
+        with self._state_lock:
+            self._last_joints = joints
 
     def _srv_enable(self, req, resp):
         with self._state_lock:
@@ -127,11 +144,7 @@ class PolicyClientNode(Node):
                 return
 
             frame = self._last_frame
-            joints = {
-                "name": list(self._last_joints["name"]),
-                "position": list(self._last_joints["position"]),
-                "effort": list(self._last_joints["effort"]),
-            }
+            joints = list(self._last_joints)
             generation = self._generation
             self._request_in_flight = True
 
@@ -142,7 +155,7 @@ class PolicyClientNode(Node):
         )
         thread.start()
 
-    def _request_policy(self, frame: bytes, joints: dict, generation: int):
+    def _request_policy(self, frame: bytes, joints: list[float], generation: int):
         try:
             action = self._fetch_action(frame, joints)
         except Exception as exc:
@@ -160,10 +173,10 @@ class PolicyClientNode(Node):
         if should_publish:
             self._publish_action(action)
 
-    def _fetch_action(self, frame: bytes, joints: dict) -> list[float]:
+    def _fetch_action(self, frame: bytes, joints: list[float]) -> list[float]:
         payload = json.dumps({
-            "image_jpeg_b64": base64.b64encode(frame).decode("ascii"),
-            "joint_state": joints,
+            "images_b64": [base64.b64encode(frame).decode("ascii")],
+            "joints": joints,
         }).encode("utf-8")
 
         request = urllib.request.Request(
@@ -176,9 +189,9 @@ class PolicyClientNode(Node):
             data = json.load(response)
 
         action = data.get("action")
-        if not isinstance(action, list) or len(action) < 4:
+        if not isinstance(action, list) or len(action) != len(JOINT_NAMES):
             raise RuntimeError("Policy server returned an invalid action")
-        return [float(value) for value in action[:4]]
+        return [float(value) for value in action]
 
     def _record_request_failure(self, exc: Exception):
         message = self._format_request_error(exc)
@@ -230,8 +243,8 @@ def main():
     parser.add_argument(
         "--rate-hz",
         type=float,
-        default=DEFAULT_RATE_HZ,
-        help=f"Policy polling rate in Hz (default: {DEFAULT_RATE_HZ})",
+        default=MAX_RATE_HZ,
+        help=f"Policy polling rate in Hz (default: {MAX_RATE_HZ})",
     )
     parser.add_argument(
         "--timeout-sec",
@@ -240,6 +253,8 @@ def main():
         help=f"HTTP timeout in seconds (default: {DEFAULT_TIMEOUT_SEC})",
     )
     args = parser.parse_args()
+    if args.rate_hz <= 0 or args.rate_hz > MAX_RATE_HZ:
+        parser.error(f"--rate-hz must be in (0, {MAX_RATE_HZ}]")
 
     rclpy.init()
     run_node(PolicyClientNode(args.url, args.rate_hz, args.timeout_sec))

@@ -69,22 +69,16 @@ class RoArmSimEnv:
         """Return observation dict matching the policy server's expected input.
 
         Returns:
-            dict with 'image_jpeg_b64' (str) and 'joint_state' (dict).
+            dict with 'images_b64' (list[str]) and 'joints' (list[float]).
         """
         # Render camera image
         image_b64 = self._render_camera_b64()
 
         # Joint state
         positions = self.get_joint_positions()
-        joint_state = {
-            "name": list(JOINT_NAMES),
-            "position": positions,
-            "effort": [0.0] * len(JOINT_NAMES),
-        }
-
         return {
-            "image_jpeg_b64": image_b64,
-            "joint_state": joint_state,
+            "images_b64": [image_b64],
+            "joints": positions[:len(JOINT_NAMES)],
         }
 
     def render(self) -> np.ndarray:
@@ -115,5 +109,5 @@ if __name__ == "__main__":
     print(f"Joint positions: {env.get_joint_positions()}")
     print(f"TCP position: {env.get_tcp_position()}")
     obs = env.observe()
-    print(f"Image b64 length: {len(obs['image_jpeg_b64'])}")
+    print(f"Image b64 length: {len(obs['images_b64'][0])}")
     env.close()
