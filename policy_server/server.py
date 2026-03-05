@@ -11,7 +11,7 @@ import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from demo_policy import policy
+from replay_policy import policy
 
 
 class JointStatePayload(BaseModel):

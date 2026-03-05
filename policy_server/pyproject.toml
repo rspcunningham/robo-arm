@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.116.1",
+    "huggingface-hub>=0.35.3",
+    "lerobot>=0.4.4,<0.5",
     "numpy>=2.4.2",
     "uvicorn>=0.35.0",
 ]
@@ -13,6 +15,7 @@ dependencies = [
 [tool.uv]
 package = true
 python-preference = "only-system"
+
 
 [build-system]
 requires = ["hatchling"]

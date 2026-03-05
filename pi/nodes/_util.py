@@ -10,7 +10,6 @@ from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
 
 JOINT_NAMES = ["base", "shoulder", "elbow", "hand"]
-HF_DATASET_PATTERNS = ["data/**", "meta/**"]
 
 
 def _is_shutdown_publish_error(exc: Exception) -> bool:
@@ -45,7 +44,6 @@ def pull_dataset(root: Path, repo_id: str, create_if_missing: bool = False, priv
         repo_id=repo_id,
         repo_type="dataset",
         local_dir=root,
-        allow_patterns=HF_DATASET_PATTERNS,
     )
 
 
@@ -58,7 +56,6 @@ def push_dataset(root: Path, repo_id: str, private: bool = True, commit_message:
         repo_id=repo_id,
         repo_type="dataset",
         folder_path=root,
-        allow_patterns=HF_DATASET_PATTERNS,
         commit_message=commit_message,
     )
 
