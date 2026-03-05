@@ -11,6 +11,8 @@ import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+from demo_policy import policy
+
 
 class JointStatePayload(BaseModel):
     name: list[str] = Field(default_factory=list)
@@ -101,9 +103,7 @@ async def predict(request: PredictRequest):
     positions = request.joint_state.position
     torques = request.joint_state.effort
 
-    #new_action = [0.0, -1.5, -0.75, 0.0]
-    #new_action = [0.0, 0.0, 0.0, 0.0]
-    new_action = [-1.5, 0.0, 1.5, 0.75]
+    new_action = policy(positions, torques)
 
     return PredictResponse(action=new_action)
 

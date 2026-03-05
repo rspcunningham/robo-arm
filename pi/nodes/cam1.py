@@ -46,7 +46,7 @@ SPI_SPEED_HZ = 4_000_000
 
 class CamNode(Node):
     def __init__(self):
-        super().__init__("cam")
+        super().__init__("cam1")
 
         try:
             import RPi.GPIO as gpio
@@ -63,9 +63,9 @@ class CamNode(Node):
             depth=1,
         )
         self.pub = self.create_publisher(
-            CompressedImage, "/camera/image/compressed", sensor_qos,
+            CompressedImage, "/cam1/image/compressed", sensor_qos,
         )
-        self.health_pub = self.create_publisher(String, "/camera/spi_health", 10)
+        self.health_pub = self.create_publisher(String, "/cam1/spi_health", 10)
 
         self._gpio = gpio
         self._gpio.setwarnings(False)

@@ -40,7 +40,7 @@ set -u
 cd "${PROJECT_ROOT}"
 VENV_BIN="${PROJECT_ROOT}/.venv/bin"
 
-if [[ ! -x "${VENV_BIN}/arm" || ! -x "${VENV_BIN}/cam" || ! -x "${VENV_BIN}/control-manager" || ! -x "${VENV_BIN}/policy-client" || ! -x "${VENV_BIN}/monitor" ]]; then
+if [[ ! -x "${VENV_BIN}/arm" || ! -x "${VENV_BIN}/cam0" || ! -x "${VENV_BIN}/control-manager" || ! -x "${VENV_BIN}/policy-client" || ! -x "${VENV_BIN}/monitor" ]]; then
   echo "[err] Missing venv entrypoints under ${VENV_BIN}. Run 'uv sync --project pi' first." >&2
   exit 1
 fi
@@ -88,7 +88,7 @@ trap cleanup EXIT INT TERM
 "${VENV_BIN}/arm" &
 pids+=("$!")
 
-"${VENV_BIN}/cam" &
+"${VENV_BIN}/cam0" &
 pids+=("$!")
 
 "${VENV_BIN}/control-manager" &

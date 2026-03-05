@@ -12,10 +12,11 @@ import urllib.request
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CompressedImage, JointState
+from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
+from nodes._image import ros_image_to_jpeg_bytes
 from nodes._util import (
     JOINT_NAMES,
     publish_or_ignore_shutdown,
@@ -25,6 +26,7 @@ from nodes._util import (
 DEFAULT_POLICY_URL = "http://127.0.0.1:8000/predict"
 DEFAULT_RATE_HZ = 5.0
 DEFAULT_TIMEOUT_SEC = 1.0
+IMAGE_TOPIC = "/cam0/image_raw"
 WARNING_INTERVAL_SEC = 5.0
 
 
@@ -44,7 +46,7 @@ class PolicyClientNode(Node):
         self.status_pub = self.create_publisher(String, "/policy/status", 10)
         self.create_service(SetBool, "/policy_enable", self._srv_enable)
         self.create_subscription(
-            CompressedImage, "/camera/image/compressed", self._on_image, sensor_qos,
+            Image, IMAGE_TOPIC, self._on_image, sensor_qos,
         )
         self.create_subscription(
             JointState, "/joint_states", self._on_joints, 10,
@@ -60,6 +62,7 @@ class PolicyClientNode(Node):
         self._last_success_unix_sec: float | None = None
         self._last_error: str | None = None
         self._last_warning_monotonic = 0.0
+        self._last_image_warning_monotonic = 0.0
 
         self.create_timer(1.0 / rate_hz, self._control_loop)
         self.create_timer(1.0, self._publish_status)
@@ -67,9 +70,18 @@ class PolicyClientNode(Node):
 
         self.get_logger().info(f"Policy client ready ({self.policy_url})")
 
-    def _on_image(self, msg: CompressedImage):
+    def _on_image(self, msg: Image):
+        try:
+            frame = ros_image_to_jpeg_bytes(msg, quality=85)
+        except ValueError as exc:
+            now = time.monotonic()
+            if now - self._last_image_warning_monotonic >= WARNING_INTERVAL_SEC:
+                self._last_image_warning_monotonic = now
+                self.get_logger().warning(f"Dropping unsupported camera frame: {exc}")
+            return
+
         with self._state_lock:
-            self._last_frame = bytes(msg.data)
+            self._last_frame = frame
 
     def _on_joints(self, msg: JointState):
         with self._state_lock:

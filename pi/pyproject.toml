@@ -45,7 +45,8 @@ packages = ["."]
 [project.scripts]
 esp = "esp:main"
 arm = "nodes.arm:main"
-cam = "nodes.cam:main"
+cam0 = "nodes.cam0:main"
+cam1 = "nodes.cam:main"
 control-manager = "nodes.control_manager:main"
 policy-client = "nodes.policy_client:main"
 record = "nodes.record:main"

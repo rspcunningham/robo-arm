@@ -15,16 +15,20 @@ import rclpy
 from aiohttp import web
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CompressedImage, JointState
+from sensor_msgs.msg import Image as RosImage, JointState
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
+from nodes._image import ros_image_to_jpeg_bytes
 from nodes._util import (
     JOINT_NAMES,
     shutdown_background_node,
     spin_in_background,
     wait_for_future,
 )
+
+IMAGE_TOPIC = "/cam0/image_raw"
+SPI_HEALTH_TOPIC = "/cam1/spi_health"
 
 HTML_PAGE = """\
 <!DOCTYPE html>
@@ -794,6 +798,7 @@ class MonitorNode(Node):
         self._loop = loop
         self.state_event = asyncio.Event()
         self.last_jpeg: bytes | None = None
+        self._last_image_warning_monotonic = 0.0
         self.last_joints: dict | None = None
         self.last_spi_health = {
             "recoveries_total": 0,
@@ -839,13 +844,13 @@ class MonitorNode(Node):
             depth=1,
         )
         self.create_subscription(
-            CompressedImage, "/camera/image/compressed", self._on_image, sensor_qos,
+            RosImage, IMAGE_TOPIC, self._on_image, sensor_qos,
         )
         self.create_subscription(
             JointState, "/joint_states", self._on_joints, 10,
         )
         self.create_subscription(
-            String, "/camera/spi_health", self._on_spi_health, 10,
+            String, SPI_HEALTH_TOPIC, self._on_spi_health, 10,
         )
         self.create_subscription(
             String, "/policy/status", self._on_policy_status, 10,
@@ -869,8 +874,14 @@ class MonitorNode(Node):
             "policy": self.last_policy_status,
         }
 
-    def _on_image(self, msg: CompressedImage):
-        self.last_jpeg = bytes(msg.data)
+    def _on_image(self, msg: RosImage):
+        try:
+            self.last_jpeg = ros_image_to_jpeg_bytes(msg, quality=80)
+        except ValueError as exc:
+            now = self.get_clock().now().nanoseconds / 1e9
+            if now - self._last_image_warning_monotonic >= 5.0:
+                self._last_image_warning_monotonic = now
+                self.get_logger().warning(f"Dropping unsupported camera frame: {exc}")
 
     def _on_joints(self, msg: JointState):
         self.last_joints = {

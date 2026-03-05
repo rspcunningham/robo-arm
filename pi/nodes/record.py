@@ -8,7 +8,6 @@ LeRobot loaders, sharding rules, metadata, and Hub tooling.
 """
 
 import argparse
-import io
 import json
 import shutil
 import threading
@@ -18,13 +17,13 @@ from typing import Any
 
 import numpy as np
 import rclpy
-from PIL import Image
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-from sensor_msgs.msg import CompressedImage, JointState
+from sensor_msgs.msg import Image as RosImage, JointState
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+from nodes._image import ros_image_to_rgb_pil
 from nodes._util import (
     JOINT_NAMES,
     dataset_root,
@@ -52,6 +51,7 @@ LEROBOT_FEATURES = {
         "names": JOINT_NAMES,
     },
 }
+IMAGE_TOPIC = "/cam0/image_raw"
 
 
 def has_complete_dataset_root(root: Path) -> bool:
@@ -116,10 +116,8 @@ def open_or_create_dataset(repo_id: str, root: Path, fps: int) -> Any:
     return dataset
 
 
-def build_frame(task: str, joints: JointState, image_msg: CompressedImage) -> dict[str, Any]:
-    with Image.open(io.BytesIO(bytes(image_msg.data))) as image:
-        rgb_image = image.convert("RGB")
-
+def build_frame(task: str, joints: JointState, image_msg: RosImage) -> dict[str, Any]:
+    rgb_image = ros_image_to_rgb_pil(image_msg)
     state = np.asarray(joints.position[:4], dtype=np.float32)
     return {
         "task": task,
@@ -150,8 +148,8 @@ class RecordNode(Node):
             10,
         )
         self._image_sub = self.create_subscription(
-            CompressedImage,
-            "/camera/image/compressed",
+            RosImage,
+            IMAGE_TOPIC,
             self._on_image,
             qos_profile_sensor_data,
         )
@@ -165,7 +163,7 @@ class RecordNode(Node):
     def _on_joints(self, msg: JointState):
         self._last_joints = msg
 
-    def _on_image(self, msg: CompressedImage):
+    def _on_image(self, msg: RosImage):
         self._last_frame = msg
 
     def _on_control(self, msg: String):
@@ -238,6 +236,7 @@ def main():
     interval = 1.0 / dataset.fps
     stop_flag = threading.Event()
     saved_episodes = 0
+    last_image_warning_monotonic = 0.0
 
     def _wait_enter():
         """Block until Enter is pressed, then set stop_flag."""
@@ -279,7 +278,19 @@ def main():
                         time.sleep(interval - elapsed)
                     continue
 
-                dataset.add_frame(build_frame(args.task, js, img_msg))
+                try:
+                    frame = build_frame(args.task, js, img_msg)
+                except ValueError as exc:
+                    now = time.monotonic()
+                    if now - last_image_warning_monotonic >= 5.0:
+                        last_image_warning_monotonic = now
+                        node.get_logger().warning(f"Dropping unsupported camera frame: {exc}")
+                    elapsed = time.time() - t0
+                    if elapsed < interval:
+                        time.sleep(interval - elapsed)
+                    continue
+
+                dataset.add_frame(frame)
                 frame_count += 1
                 print(f"\r  frame {frame_count}", end="", flush=True)
 
