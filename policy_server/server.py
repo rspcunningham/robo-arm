@@ -66,36 +66,7 @@ stats = RequestStats()
 _stop_event = threading.Event()
 _log_thread: threading.Thread | None = None
 
-
-def _rate_logger():
-    while not _stop_event.wait(RATE_LOG_INTERVAL_SEC):
-        total, recent_count, rate_hz = stats.snapshot()
-        LOGGER.info(
-            "predict rate %.1f Hz over last %.0fs (%d requests, total %d)",
-            rate_hz,
-            RATE_WINDOW_SEC,
-            recent_count,
-            total,
-        )
-
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    global _log_thread
-
-    _stop_event.clear()
-    _log_thread = threading.Thread(target=_rate_logger, daemon=True)
-    _log_thread.start()
-    try:
-        yield
-    finally:
-        _stop_event.set()
-        if _log_thread is not None:
-            _log_thread.join(timeout=1.0)
-            _log_thread = None
-
-
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 
 def _split_policy_target(target: str) -> tuple[Path, str]:
@@ -135,14 +106,18 @@ def _validate_policy_signature(function: Callable[..., object], target: str):
 
 
 def load_policy(target: str) -> PolicyCallable:
+
     path, function_name = _split_policy_target(target)
     module = _load_module_from_file(path)
     function = getattr(module, function_name, None)
+
     if function is None:
         raise AttributeError(f"Function '{function_name}' not found in {path}")
     if not callable(function):
         raise TypeError(f"Target '{target}' is not callable")
+
     _validate_policy_signature(function, target)
+
     return function
 
 

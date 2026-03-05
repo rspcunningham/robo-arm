@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot Monitor</title>
+<style>
+  @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+
+  :root {
+    --bg: #0a0e14;
+    --bg-soft: #0e1520;
+    --line: #243245;
+    --line-soft: #1a2635;
+    --text: #e8edf4;
+    --muted: #9aabbf;
+    --accent: #48c774;
+    --danger: #ef6461;
+    --warn: #e3b341;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    color: var(--text);
+    background:
+      radial-gradient(900px 420px at 10% -10%, #172235 0%, transparent 58%),
+      linear-gradient(180deg, #0b1018 0%, var(--bg) 65%);
+    padding: 12px;
+    font-family: "IBM Plex Sans", sans-serif;
+  }
+
+  .shell {
+    max-width: 1680px;
+    margin: 0 auto;
+  }
+
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 11px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .eyebrow {
+    color: var(--muted);
+    font: 600 0.7rem/1 "IBM Plex Mono", monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  h1 {
+    font-size: clamp(1.12rem, 1.9vw, 1.52rem);
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: 0.01em;
+  }
+
+  .subhead {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 0.88rem;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 11px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: rgba(14, 21, 32, 0.78);
+    font: 600 0.72rem/1 "IBM Plex Mono", monospace;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .status-pill::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--warn);
+  }
+
+  .status-pill.online::before { background: var(--accent); }
+  .status-pill.stale::before { background: var(--danger); }
+
+  .layout {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 326px;
+    gap: 20px;
+    align-items: start;
+  }
+
+  .frame-head,
+  .frame-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    color: var(--muted);
+    font: 500 0.74rem/1.4 "IBM Plex Mono", monospace;
+  }
+
+  .frame-head {
+    margin-bottom: 8px;
+  }
+
+  .section-title {
+    color: var(--muted);
+    font: 600 0.68rem/1 "IBM Plex Mono", monospace;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
+  .camera-frame {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #04070d;
+    min-height: 420px;
+  }
+
+  .camera-frame img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: contain;
+    background: #04070d;
+  }
+
+  .frame-foot {
+    margin-top: 8px;
+  }
+
+  .side-column {
+    border-left: 1px solid var(--line-soft);
+    padding-left: 14px;
+    display: grid;
+    gap: 16px;
+  }
+
+  .rail-section {
+    border-top: 1px solid var(--line-soft);
+    padding-top: 10px;
+  }
+
+  .control-list {
+    margin-top: 4px;
+  }
+
+  .control-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .control-item:last-child { border-bottom: 0; }
+
+  .control-label {
+    font-size: 0.9rem;
+    color: var(--text);
+  }
+
+  .toggle {
+    min-width: 82px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    padding: 6px 11px;
+    cursor: pointer;
+    color: var(--text);
+    background: rgba(24, 33, 46, 0.85);
+    font: 600 0.7rem/1 "IBM Plex Mono", monospace;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    transition: border-color 140ms ease, background-color 140ms ease;
+  }
+
+  .toggle.off {
+    border-color: rgba(239, 100, 97, 0.34);
+    background: rgba(239, 100, 97, 0.1);
+  }
+
+  .toggle.on {
+    border-color: rgba(72, 199, 116, 0.45);
+    background: rgba(72, 199, 116, 0.14);
+  }
+
+  .toggle.busy,
+  .toggle.locked {
+    border-color: rgba(154, 171, 191, 0.35);
+    background: rgba(154, 171, 191, 0.14);
+    color: var(--muted);
+  }
+
+  .toggle:disabled {
+    cursor: wait;
+  }
+
+  table {
+    width: 100%;
+    margin-top: 7px;
+    border-collapse: collapse;
+  }
+
+  th, td {
+    padding: 7px 0;
+    border-bottom: 1px solid var(--line-soft);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  tr:last-child td { border-bottom: 0; }
+
+  th {
+    color: var(--muted);
+    font: 600 0.63rem/1 "IBM Plex Mono", monospace;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  td {
+    font-size: 0.84rem;
+  }
+
+  .label {
+    text-align: left;
+    color: var(--text);
+  }
+
+  .footer {
+    color: var(--muted);
+    font: 500 0.74rem/1.4 "IBM Plex Mono", monospace;
+  }
+
+  @media (max-width: 1050px) {
+    .layout {
+      grid-template-columns: 1fr;
+    }
+
+    .side-column {
+      border-left: 0;
+      border-top: 1px solid var(--line-soft);
+      padding-left: 0;
+      padding-top: 10px;
+    }
+
+    .camera-frame {
+      min-height: 300px;
+    }
+  }
+
+  @media (max-width: 720px) {
+    body {
+      padding: 8px;
+    }
+
+    .topbar {
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+
+    .frame-head,
+    .frame-foot {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .camera-frame {
+      min-height: 220px;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <section class="topbar">
+    <div>
+      <div class="eyebrow">Pi Telemetry</div>
+      <h1>Robot Monitor</h1>
+      <p class="subhead">Live camera and actuator telemetry.</p>
+    </div>
+    <div id="status-pill" class="status-pill">Awaiting stream</div>
+  </section>
+
+  <section class="layout">
+    <section>
+      <div class="frame-head">
+        <span class="section-title">Camera Feed</span>
+        <span id="updated-at">No telemetry yet</span>
+      </div>
+      <div class="camera-frame">
+        <img id="cam" alt="camera">
+      </div>
+      <div class="frame-foot">
+        <span id="cam-status">Camera feed pending</span>
+        <span>Snapshot stream</span>
+      </div>
+    </section>
+
+    <aside class="side-column">
+      <section class="rail-section">
+        <div class="section-title">Controls</div>
+        <div class="control-list">
+          <div class="control-item">
+            <span class="control-label">Policy</span>
+            <button id="policy-toggle" class="toggle off" type="button" aria-pressed="false">Off</button>
+          </div>
+          <div class="control-item">
+            <span class="control-label">Joint Torque</span>
+            <button id="torque-toggle" class="toggle on" type="button" aria-pressed="true">On</button>
+          </div>
+          <div class="control-item">
+            <span class="control-label">Work Light</span>
+            <button id="light-toggle" class="toggle off" type="button" aria-pressed="false">Off</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="rail-section">
+        <div class="section-title">Joint Telemetry</div>
+        <table id="joint-table">
+          <tr><th class="label">Joint</th><th>Position (rad)</th><th>Torque (N m)</th></tr>
+        </table>
+      </section>
+
+      <div class="footer" id="footer-status">Event stream disconnected</div>
+    </aside>
+  </section>
+</div>
+<script>
+const JOINTS = %JOINTS%;
+const jointTable = document.getElementById('joint-table');
+const statusPill = document.getElementById('status-pill');
+const footerStatus = document.getElementById('footer-status');
+const camStatus = document.getElementById('cam-status');
+const updatedAt = document.getElementById('updated-at');
+const policyToggleBtn = document.getElementById('policy-toggle');
+const torqueToggleBtn = document.getElementById('torque-toggle');
+const lightToggleBtn = document.getElementById('light-toggle');
+
+JOINTS.forEach(name => {
+  const row = jointTable.insertRow();
+  row.innerHTML = `<td class="label">${name}</td><td id="pos-${name}">-</td><td id="eff-${name}">-</td>`;
+});
+
+const cam = document.getElementById('cam');
+let prevUrl = null;
+let lastFrameAt = 0;
+let lastEvent = 0;
+let policyBusy = false;
+let torqueBusy = false;
+let lightBusy = false;
+let latestControl = null;
+let latestLight = null;
+
+function setConnectionState(label, className, footer) {
+  statusPill.textContent = label;
+  statusPill.className = `status-pill ${className}`;
+  footerStatus.textContent = footer;
+}
+
+function getControl() {
+  return latestControl || {
+    mode: 'idle',
+    torque_enabled: true,
+  };
+}
+
+function setToggleButton(button, enabled, busy, locked) {
+  button.disabled = busy || locked;
+  button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+
+  if (busy) {
+    button.textContent = 'Busy';
+    button.className = 'toggle busy';
+    return;
+  }
+
+  if (locked) {
+    button.textContent = 'Locked';
+    button.className = 'toggle locked';
+    return;
+  }
+
+  button.textContent = enabled ? 'On' : 'Off';
+  button.className = `toggle ${enabled ? 'on' : 'off'}`;
+}
+
+function refreshControlToggles() {
+  const control = getControl();
+  const mode = control.mode;
+
+  const policyEnabled = mode === 'policy';
+  const policyLocked = mode === 'record' || mode === 'replay';
+  setToggleButton(policyToggleBtn, policyEnabled, policyBusy, policyLocked);
+
+  const torqueEnabled = !!control.torque_enabled;
+  const torqueLocked = mode !== 'idle';
+  setToggleButton(torqueToggleBtn, torqueEnabled, torqueBusy, torqueLocked);
+}
+
+function refreshLightToggle() {
+  const lightEnabled = latestLight?.enabled ?? false;
+  setToggleButton(lightToggleBtn, lightEnabled, lightBusy, false);
+}
+
+async function setPolicyEnabled(enabled) {
+  policyBusy = true;
+  refreshControlToggles();
+  try {
+    const response = await fetch(enabled ? '/api/control/policy/enable' : '/api/control/policy/disable', {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    footerStatus.textContent = `Policy toggle failed: ${error.message}`;
+  } finally {
+    policyBusy = false;
+    refreshControlToggles();
+  }
+}
+
+async function setTorqueEnabled(enabled) {
+  torqueBusy = true;
+  refreshControlToggles();
+  try {
+    const response = await fetch(enabled ? '/api/control/torque/enable' : '/api/control/torque/disable', {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    footerStatus.textContent = `Torque toggle failed: ${error.message}`;
+  } finally {
+    torqueBusy = false;
+    refreshControlToggles();
+  }
+}
+
+async function setLightEnabled(enabled) {
+  lightBusy = true;
+  refreshLightToggle();
+  try {
+    const response = await fetch(enabled ? '/api/light/enable' : '/api/light/disable', {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    footerStatus.textContent = `Light toggle failed: ${error.message}`;
+  } finally {
+    lightBusy = false;
+    refreshLightToggle();
+  }
+}
+
+policyToggleBtn.addEventListener('click', () => {
+  const policyEnabled = getControl().mode === 'policy';
+  setPolicyEnabled(!policyEnabled);
+});
+
+torqueToggleBtn.addEventListener('click', () => {
+  const torqueEnabled = !!getControl().torque_enabled;
+  setTorqueEnabled(!torqueEnabled);
+});
+
+lightToggleBtn.addEventListener('click', () => {
+  const lightEnabled = latestLight?.enabled ?? false;
+  setLightEnabled(!lightEnabled);
+});
+
+function refreshDerivedState() {
+  const now = Date.now();
+  const frameAgeMs = lastFrameAt ? now - lastFrameAt : null;
+
+  if (frameAgeMs != null && frameAgeMs < 2000) {
+    camStatus.textContent = `Camera live · ${Math.round(frameAgeMs / 1000)}s frame age`;
+  } else if (lastFrameAt) {
+    camStatus.textContent = `Camera stale · ${Math.round(frameAgeMs / 1000)}s frame age`;
+  } else {
+    camStatus.textContent = 'Camera feed pending';
+  }
+
+  if (now - lastEvent > 2000) {
+    setConnectionState('Stream stale', 'stale', 'No fresh telemetry in the last 2s');
+  }
+
+  refreshControlToggles();
+  refreshLightToggle();
+}
+
+async function streamVideo() {
+  while (true) {
+    try {
+      const response = await fetch('/snapshot');
+      if (!response.ok) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        continue;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      if (prevUrl) URL.revokeObjectURL(prevUrl);
+      prevUrl = url;
+      await new Promise((resolve, reject) => {
+        cam.onload = resolve;
+        cam.onerror = reject;
+        cam.src = url;
+      });
+      lastFrameAt = Date.now();
+    } catch (_error) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+}
+streamVideo();
+
+const es = new EventSource('/events');
+es.onmessage = event => {
+  const data = JSON.parse(event.data);
+  lastEvent = Date.now();
+
+  setConnectionState('Telemetry live', 'online', 'Receiving joint telemetry updates');
+  updatedAt.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+
+  const joints = data.joints;
+  if (joints) {
+    joints.name.forEach((name, index) => {
+      const position = joints.position[index];
+      const effort = joints.effort[index];
+      const posCell = document.getElementById(`pos-${name}`);
+      const effCell = document.getElementById(`eff-${name}`);
+      if (posCell && typeof position === 'number') {
+        posCell.textContent = position.toFixed(4);
+      }
+      if (effCell && typeof effort === 'number') {
+        effCell.textContent = effort.toFixed(1);
+      }
+    });
+  }
+
+  latestControl = data.control || latestControl;
+  latestLight = data.light || latestLight;
+
+  refreshDerivedState();
+};
+
+es.onerror = () => {
+  setConnectionState('Disconnected', 'stale', 'Event stream disconnected');
+};
+
+setInterval(refreshDerivedState, 1000);
+</script>
+</body>
+</html>
