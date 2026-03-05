@@ -16,8 +16,8 @@ preprocess, postprocess = make_pre_post_processors(
     model_id,
     preprocessor_overrides={"device_processor": {"device": str(device)}},
 )
-# load a lerobotdataset (we will replace with a simpler dataset)
-dataset = LeRobotDataset("lerobot/libero")
+# Force pyav backend to avoid torchcodec+pyav FFmpeg dylib collisions on macOS.
+dataset = LeRobotDataset("lerobot/libero", video_backend="pyav")
 
 # pick an episode
 episode_index = 0
@@ -30,9 +30,24 @@ to_idx   = dataset.meta.episodes["dataset_to_index"][episode_index]
 frame_index = from_idx
 frame = dict(dataset[frame_index])
 
+expected_image_keys = [
+    key for key in policy.config.input_features.keys() if key.startswith("observation.images.")
+]
+available_image_keys = [key for key in frame.keys() if key.startswith("observation.images.")]
+
+if expected_image_keys and available_image_keys:
+    # PI0.5 expects named cameras (base/left/right wrist). Some datasets provide
+    # generic names (e.g. image/image2), so remap by position and repeat the last
+    # available camera if fewer views are present.
+    for i, dst_key in enumerate(expected_image_keys):
+        src_key = available_image_keys[min(i, len(available_image_keys) - 1)]
+        frame[dst_key] = frame[src_key]
+
 batch = preprocess(frame)
 with torch.inference_mode():
     pred_action = policy.select_action(batch)
     # use your policy postprocess, this post process the action
     # for instance unnormalize the actions, detokenize it etc..
     pred_action = postprocess(pred_action)
+
+print("pred_action:", pred_action)
