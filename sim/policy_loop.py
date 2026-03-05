@@ -22,7 +22,7 @@ import mujoco.viewer
 from env import JOINT_NAMES, RoArmSimEnv
 
 DEFAULT_POLICY_URL = "http://127.0.0.1:8000/predict"
-MAX_RATE_HZ = 5.0
+MAX_RATE_HZ = 20.0
 DEFAULT_TIMEOUT_SEC = 2.0
 
 
@@ -39,9 +39,10 @@ def fetch_action(url: str, observation: dict, timeout: float) -> list[float]:
         data = json.load(response)
 
     action = data.get("action")
-    if not isinstance(action, list) or len(action) < 4:
+    expected_len = len(JOINT_NAMES)
+    if not isinstance(action, list) or len(action) != expected_len:
         raise RuntimeError(f"Policy server returned invalid action: {data}")
-    return [float(v) for v in action[:4]]
+    return [float(v) for v in action]
 
 
 def run_headless(env: RoArmSimEnv, url: str, rate_hz: float, timeout: float):

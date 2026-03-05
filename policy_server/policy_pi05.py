@@ -1,24 +1,20 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from time import perf_counter_ns
+import base64
+from collections.abc import Sequence
+import io
 from typing import Callable, cast
 
+import numpy as np
+from PIL import Image
 import torch
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_pre_post_processors
 from lerobot.policies.pi05 import PI05Policy
 
 MODEL_ID = "lerobot/pi05_base"
-DATASET_ID = "rspcunningham/test"
-VIDEO_BACKEND = "pyav"
 DEVICE = torch.device("mps")
-
-# Dataset camera key -> PI0.5 camera key.
-CAMERA_MAP_DATASET_TO_PI = {
-    "observation.images.front": "observation.images.base_0_rgb",
-}
+ACTION_DIM = 4
 
 # Robot joint index -> PI0.5 joint index.
 ROBOT_TO_PI_JOINT_MAP = {
@@ -58,16 +54,6 @@ def get_pi_image_keys(policy: PI05Policy) -> list[str]:
     return [key for key in input_features.keys() if key.startswith("observation.images.")]
 
 
-def build_camera_mapping(
-    expected_pi_image_keys: list[str], dataset_to_pi_camera_map: dict[str, str]
-) -> dict[str, str]:
-    resolved_mapping: dict[str, str] = {}
-    for dataset_camera_key, pi_camera_key in dataset_to_pi_camera_map.items():
-        if pi_camera_key in expected_pi_image_keys:
-            resolved_mapping[pi_camera_key] = dataset_camera_key
-    return resolved_mapping
-
-
 def _to_1d_float_tensor(values: TensorOrSeq) -> torch.Tensor:
     if isinstance(values, torch.Tensor):
         tensor = values.to(dtype=torch.float32)
@@ -76,11 +62,15 @@ def _to_1d_float_tensor(values: TensorOrSeq) -> torch.Tensor:
     return tensor.reshape(-1)
 
 
-def _sync_device(device: torch.device) -> None:
-    if device.type == "cuda":
-        torch.cuda.synchronize(device=device)
-    elif device.type == "mps":
-        torch.mps.synchronize()
+def _decode_jpeg_b64(image_b64: str) -> np.ndarray:
+    raw = base64.b64decode(image_b64)
+    with Image.open(io.BytesIO(raw)) as image:
+        rgb = image.convert("RGB")
+        return np.asarray(rgb, dtype=np.uint8)
+
+
+def _masked_image_like(reference_image: np.ndarray) -> np.ndarray:
+    return np.zeros_like(reference_image, dtype=np.uint8)
 
 
 class PIInferencePipeline:
@@ -91,13 +81,11 @@ class PIInferencePipeline:
     preprocess_fn: Callable[[Sample], dict[str, object]]
     postprocess_fn: Callable[[torch.Tensor], torch.Tensor]
     expected_pi_image_keys: list[str]
-    camera_mapping: dict[str, str]
 
     def __init__(
         self,
         model_id: str = MODEL_ID,
         device: torch.device = DEVICE,
-        dataset_to_pi_camera_map: dict[str, str] = CAMERA_MAP_DATASET_TO_PI,
         robot_to_pi_joint_map: dict[int, int] = ROBOT_TO_PI_JOINT_MAP,
     ):
         self.model_id = model_id
@@ -114,39 +102,71 @@ class PIInferencePipeline:
         self.postprocess_fn = cast(Callable[[torch.Tensor], torch.Tensor], postprocess)
 
         self.expected_pi_image_keys = get_pi_image_keys(self.policy)
-        self.camera_mapping = build_camera_mapping(self.expected_pi_image_keys, dataset_to_pi_camera_map)
+        if not self.expected_pi_image_keys:
+            raise RuntimeError("PI0.5 policy has no expected image keys in config.input_features")
 
     def predict_action(
         self,
-        images: Mapping[str, object],
-        joint_positions: TensorOrSeq,
+        images_b64: Sequence[str],
+        joints: TensorOrSeq,
         task: str,
-    ) -> torch.Tensor:
+    ) -> list[float]:
+        if len(images_b64) != 1:
+            raise ValueError(f"Expected exactly 1 image(s) for base_0_rgb, got {len(images_b64)}")
+
+        base_image = _decode_jpeg_b64(images_b64[0])
         sample: Sample = {}
-        for pi_camera_key, dataset_camera_key in self.camera_mapping.items():
-            if dataset_camera_key not in images:
-                raise ValueError(f"Missing required image key: {dataset_camera_key}")
-            sample[pi_camera_key] = images[dataset_camera_key]
+        for pi_camera_key in self.expected_pi_image_keys:
+            if "base_0_rgb" in pi_camera_key:
+                sample[pi_camera_key] = base_image
+            elif "left_wrist_0_rgb" in pi_camera_key or "right_wrist_0_rgb" in pi_camera_key:
+                sample[pi_camera_key] = _masked_image_like(base_image)
+            else:
+                raise ValueError(f"Unsupported camera key for single-image mode: {pi_camera_key}")
         sample["task"] = task
 
-        state = _to_1d_float_tensor(joint_positions)
+        state = _to_1d_float_tensor(joints)
         sample["observation.state"] = remap_vector_to_target_dim(
             state, self.policy.config.max_state_dim, self.robot_to_pi_joint_map
         )
 
         batch = self.preprocess_fn(sample)
-        tensor_batch = {key: value for key, value in batch.items() if isinstance(value, torch.Tensor)}
+        tensor_batch: dict[str, torch.Tensor] = {}
+        for key, value in batch.items():
+            if isinstance(value, torch.Tensor):
+                tensor_batch[key] = value
+                continue
+            if key in self.expected_pi_image_keys and isinstance(value, np.ndarray):
+                image_np = np.array(value, copy=True)
+                image_tensor = torch.from_numpy(image_np)
+                if image_tensor.ndim == 3 and image_tensor.shape[-1] == 3:
+                    image_tensor = image_tensor.permute(2, 0, 1).unsqueeze(0)
+                elif image_tensor.ndim == 3:
+                    image_tensor = image_tensor.unsqueeze(0)
+                image_tensor = image_tensor.to(dtype=torch.float32)
+                if image_tensor.numel() > 0 and image_tensor.max() > 1.0:
+                    image_tensor = image_tensor / 255.0
+                tensor_batch[key] = image_tensor
         with torch.inference_mode():
             pi_action = self.policy.select_action(tensor_batch)
             pi_action = self.postprocess_fn(pi_action)
             robot_action = remap_pi_to_robot(pi_action, self.robot_to_pi_joint_map)
 
         if robot_action.ndim > 1 and robot_action.shape[0] == 1:
-            return robot_action[0]
-        return robot_action
+            robot_action = robot_action[0]
 
-pipe = PIInferencePipeline()
+        action = [float(value) for value in robot_action.reshape(-1).tolist()]
+        if len(action) < ACTION_DIM:
+            raise RuntimeError(f"Policy returned {len(action)} values, expected at least {ACTION_DIM}")
+        return action[:ACTION_DIM]
 
 
-def inference(images: dict[str, object], state: torch.Tensor, task: str):
-    return pipe.predict_action(images, state, task)
+_PIPE = PIInferencePipeline()
+
+
+def _get_pipe() -> PIInferencePipeline:
+    return _PIPE
+
+
+def inference(images_b64: list[str], joints: list[float], task: str) -> list[float]:
+    return _get_pipe().predict_action(images_b64, joints, task)
