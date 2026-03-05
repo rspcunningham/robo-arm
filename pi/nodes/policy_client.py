@@ -24,7 +24,7 @@ from nodes._util import (
 )
 
 DEFAULT_POLICY_URL = "http://127.0.0.1:8000/predict"
-DEFAULT_RATE_HZ = 5.0
+MAX_RATE_HZ = 50.0
 DEFAULT_TIMEOUT_SEC = 1.0
 IMAGE_TOPIC = "/cam0/image_raw"
 WARNING_INTERVAL_SEC = 5.0

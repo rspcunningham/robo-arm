@@ -23,4 +23,5 @@ reportMissingTypeStubs = false
 [dependency-groups]
 dev = [
     "basedpyright>=1.38.2",
+    "ipykernel>=7.2.0",
 ]
