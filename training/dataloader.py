@@ -9,7 +9,8 @@ import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from torch import Tensor
 from torch.utils.data import Dataset
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoTokenizer
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 OBS_LANGUAGE_ATTENTION_MASK = "observation.language.attention_mask"
 OBS_LANGUAGE_TOKENS = "observation.language.tokens"

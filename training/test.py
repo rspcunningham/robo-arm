@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
-
-# Required on MPS for PI0.5 forward path ops that are not fully implemented on Metal.
-os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import matplotlib.pyplot as plt
 import torch
@@ -13,12 +9,12 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
 from dataloader import (
-    OBS_LANGUAGE_ATTENTION_MASK,
     DataLoaderConfig,
     ModelBatch,
     collate_pi05,
     make_raw_dataset,
 )
+from pi05_mps_loss import pi05_forward_loss_mps_safe
 
 # Fixed script constants
 CHECKPOINT_PATH = "../checkpoints/pi05_base"
@@ -30,14 +26,11 @@ BATCH_SIZE = 1
 CHUNK_SIZE = 50
 
 
-def _to_device(batch: ModelBatch, device: torch.device) -> dict[str, torch.Tensor]:
+def _to_device(batch: ModelBatch, device: torch.device) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
     moved: dict[str, torch.Tensor] = {}
     for key, value in batch.model_inputs.items():
-        tensor = value.to(device)
-        if key == OBS_LANGUAGE_ATTENTION_MASK:
-            tensor = tensor.to(torch.bool)
-        moved[key] = tensor
-    return moved
+        moved[key] = value.to(device)
+    return moved, batch.action_pad_mask.to(device)
 
 
 def _run_loss_curve() -> tuple[list[int], list[float]]:
@@ -81,8 +74,13 @@ def _run_loss_curve() -> tuple[list[int], list[float]]:
             if not isinstance(model_batch, ModelBatch):
                 raise TypeError(f"Expected ModelBatch from collate_fn, got {type(model_batch)}")
 
-            forward_batch = _to_device(model_batch, DEVICE)
-            loss, _ = model(forward_batch)
+            forward_batch, action_pad_mask = _to_device(model_batch, DEVICE)
+            loss, _ = pi05_forward_loss_mps_safe(
+                model,
+                forward_batch,
+                action_pad_mask=action_pad_mask,
+                reduction="mean",
+            )
 
             steps.append(step)
             losses.append(float(loss.item()))
