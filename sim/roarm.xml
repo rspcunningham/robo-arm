@@ -25,7 +25,7 @@
     <!-- Scene -->
     <geom name="ground" type="plane" size="1 1 0.01" material="grid_mat"/>
     <light name="spotlight" pos="0.0 0.0 1.5" dir="0 0 -1" diffuse="0.8 0.8 0.8" specular="0.3 0.3 0.3"/>
-    <camera name="esp_cam" pos="0.35 0.0 0.65" xyaxes="0 1 0 -0.6 0 0.8" fovy="60"/>
+    <camera name="esp_cam" pos="-0.05 0.0 0.38" xyaxes="0 -1 0 -0.15 0 1" fovy="70"/>
     <camera name="side_cam" pos="0.0 -0.6 0.6" xyaxes="1 0 0 0 0.7 0.7" fovy="60"/>
 
     <body name="table" pos="0 0 0.35">

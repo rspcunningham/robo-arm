@@ -133,12 +133,25 @@ class RoArmReachEnv(gym.Env):
         vaddr = self._target_qvel_addr
         self.sim.data.qvel[vaddr: vaddr + 6] = 0
 
+    def _random_start_joints(self, rng: np.random.Generator) -> list[float]:
+        """Sample random initial joint positions within safe sub-range of limits."""
+        joints = []
+        for name in self.CONTROLLED_JOINTS:
+            lo, hi = self.JOINT_LIMITS[name]
+            # Use 60% of the full range to avoid extreme configurations
+            mid = (lo + hi) / 2
+            half = (hi - lo) / 2 * 0.6
+            joints.append(float(rng.uniform(mid - half, mid + half)))
+        joints.append(0.0)  # hand fixed
+        return joints
+
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         rng = self.np_random
 
-        # Reset sim to home position (all joints at 0)
-        self.sim.reset(qpos=[0.0, 0.0, 0.0, 0.0])
+        # Random initial joint configuration
+        init_qpos = self._random_start_joints(rng)
+        self.sim.reset(qpos=init_qpos)
 
         # Randomize target
         self._randomize_target(rng)
