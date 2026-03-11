@@ -410,6 +410,23 @@
       </section>
 
       <section class="rail-section">
+        <div class="section-title">Policy Server</div>
+        <div class="form-stack">
+          <label class="form-field">
+            <span class="field-label">Websocket Endpoint</span>
+            <input id="policy-endpoint" class="text-input" type="text" value="ws://Robins-MacBook-Pro.local:8000" spellcheck="false">
+          </label>
+          <button id="policy-endpoint-save" class="action-button" type="button">Apply Endpoint</button>
+          <label class="form-field">
+            <span class="field-label">Prompt</span>
+            <input id="policy-prompt" class="text-input" type="text" placeholder="pick up the red block" spellcheck="false">
+          </label>
+          <button id="policy-prompt-save" class="action-button primary" type="button">Send Prompt</button>
+          <div id="policy-summary" class="record-meta">Awaiting policy status</div>
+        </div>
+      </section>
+
+      <section class="rail-section">
         <div class="section-title">Recording</div>
         <div class="form-stack">
           <label class="form-field">
@@ -454,6 +471,11 @@ const policyToggleBtn = document.getElementById('policy-toggle');
 const teleopToggleBtn = document.getElementById('teleop-toggle');
 const torqueToggleBtn = document.getElementById('torque-toggle');
 const lightToggleBtn = document.getElementById('light-toggle');
+const policyEndpointInput = document.getElementById('policy-endpoint');
+const policyEndpointSaveBtn = document.getElementById('policy-endpoint-save');
+const policyPromptInput = document.getElementById('policy-prompt');
+const policyPromptSaveBtn = document.getElementById('policy-prompt-save');
+const policySummary = document.getElementById('policy-summary');
 const recordRepoInput = document.getElementById('record-repo');
 const recordTaskInput = document.getElementById('record-task');
 const recordBeginBtn = document.getElementById('record-begin');
@@ -475,9 +497,12 @@ let policyBusy = false;
 let teleopBusy = false;
 let torqueBusy = false;
 let lightBusy = false;
+let policyConfigBusy = false;
+let policyPromptBusy = false;
 let recordBusy = false;
 let latestControl = null;
 let latestLight = null;
+let latestPolicy = null;
 let latestRecord = null;
 
 function setConnectionState(label, className, footer) {
@@ -551,6 +576,50 @@ function refreshControlToggles() {
 function refreshLightToggle() {
   const lightEnabled = latestLight?.enabled ?? false;
   setToggleButton(lightToggleBtn, lightEnabled, lightBusy, false);
+}
+
+function refreshPolicyUi() {
+  const policy = latestPolicy || {
+    endpoint: '',
+    prompt: '',
+    server_reachable: null,
+    last_success_unix_sec: null,
+    last_error: null,
+    request_in_flight: false,
+    pending_action_count: 0,
+  };
+
+  if (document.activeElement !== policyEndpointInput && !policyConfigBusy && policy.endpoint) {
+    policyEndpointInput.value = policy.endpoint;
+  }
+  if (document.activeElement !== policyPromptInput && !policyPromptBusy) {
+    policyPromptInput.value = policy.prompt || '';
+  }
+
+  policyEndpointSaveBtn.disabled = policyConfigBusy || !policyEndpointInput.value.trim();
+  policyEndpointSaveBtn.textContent = policyConfigBusy ? 'Applying' : 'Apply Endpoint';
+  const policyRunning = getControl().mode === 'policy';
+  policyPromptSaveBtn.disabled = policyPromptBusy || !policyRunning;
+  policyPromptSaveBtn.textContent = policyPromptBusy ? 'Sending' : 'Send Prompt';
+
+  const lines = [];
+  lines.push(policy.endpoint ? `Endpoint: ${policy.endpoint}` : 'Endpoint not set');
+  lines.push(policy.prompt ? `Prompt: ${policy.prompt}` : 'Prompt: empty');
+  if (policy.server_reachable === true) {
+    lines.push('Server reachable');
+  } else if (policy.server_reachable === false) {
+    lines.push('Server unreachable');
+  } else {
+    lines.push('Server status unknown');
+  }
+  lines.push(`Cached actions: ${policy.pending_action_count ?? 0}`);
+  if (policy.last_success_unix_sec) {
+    lines.push(`Last success: ${new Date(policy.last_success_unix_sec * 1000).toLocaleTimeString()}`);
+  }
+  if (policy.last_error) {
+    lines.push(`Error: ${policy.last_error}`);
+  }
+  policySummary.textContent = lines.join(' · ');
 }
 
 function refreshRecordUi() {
@@ -689,6 +758,48 @@ async function sendRecordCommand(path, payload) {
   }
 }
 
+async function setPolicyEndpoint(endpoint) {
+  policyConfigBusy = true;
+  refreshPolicyUi();
+  try {
+    const response = await fetch('/api/policy/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    footerStatus.textContent = `Policy endpoint update failed: ${error.message}`;
+  } finally {
+    policyConfigBusy = false;
+    refreshPolicyUi();
+  }
+}
+
+async function setPolicyPrompt(prompt) {
+  policyPromptBusy = true;
+  refreshPolicyUi();
+  try {
+    const response = await fetch('/api/policy/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    footerStatus.textContent = `Policy prompt update failed: ${error.message}`;
+  } finally {
+    policyPromptBusy = false;
+    refreshPolicyUi();
+  }
+}
+
 policyToggleBtn.addEventListener('click', () => {
   const policyEnabled = getControl().mode === 'policy';
   setPolicyEnabled(!policyEnabled);
@@ -707,6 +818,28 @@ torqueToggleBtn.addEventListener('click', () => {
 lightToggleBtn.addEventListener('click', () => {
   const lightEnabled = latestLight?.enabled ?? false;
   setLightEnabled(!lightEnabled);
+});
+
+policyEndpointSaveBtn.addEventListener('click', () => {
+  setPolicyEndpoint(policyEndpointInput.value.trim());
+});
+policyPromptSaveBtn.addEventListener('click', () => {
+  setPolicyPrompt(policyPromptInput.value);
+});
+
+policyEndpointInput.addEventListener('input', refreshPolicyUi);
+policyEndpointInput.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !policyEndpointSaveBtn.disabled) {
+    event.preventDefault();
+    setPolicyEndpoint(policyEndpointInput.value.trim());
+  }
+});
+policyPromptInput.addEventListener('input', refreshPolicyUi);
+policyPromptInput.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !policyPromptSaveBtn.disabled) {
+    event.preventDefault();
+    setPolicyPrompt(policyPromptInput.value);
+  }
 });
 
 recordBeginBtn.addEventListener('click', () => {
@@ -748,6 +881,7 @@ function refreshDerivedState() {
 
   refreshControlToggles();
   refreshLightToggle();
+  refreshPolicyUi();
   refreshRecordUi();
 }
 
@@ -802,6 +936,7 @@ es.onmessage = event => {
 
   latestControl = data.control || latestControl;
   latestLight = data.light || latestLight;
+  latestPolicy = data.policy || latestPolicy;
   latestRecord = data.record || latestRecord;
 
   refreshDerivedState();

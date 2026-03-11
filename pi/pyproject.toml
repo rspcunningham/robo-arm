@@ -17,10 +17,12 @@ dependencies = [
     "pillow>=12.1.1",
     "pyarrow>=23.0.1",
     "pyserial>=3.5",
+    "msgpack>=1.0.5",
     "RPi.GPIO>=0.7.1; platform_system == 'Linux' and (platform_machine == 'aarch64' or platform_machine == 'armv7l' or platform_machine == 'armv6l')",
     "spidev>=3.8; platform_system == 'Linux'",
     "torch==2.6.0",
     "torchvision==0.21.0",
+    "websockets>=11.0",
 ]
 
 [tool.uv]

@@ -59,3 +59,9 @@ def ros_image_to_jpeg_bytes(msg: RosImage, quality: int = 85) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=quality)
     return buffer.getvalue()
+
+
+def jpeg_bytes_to_rgb_array(data: bytes) -> np.ndarray:
+    with Image.open(io.BytesIO(data)) as image:
+        rgb = image.convert("RGB")
+        return np.asarray(rgb, dtype=np.uint8)

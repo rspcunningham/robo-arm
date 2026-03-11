@@ -52,6 +52,17 @@ class MonitorNode(Node):
         self.last_light_status = {
             "enabled": False,
         }
+        self.last_policy_status = {
+            "enabled": False,
+            "request_in_flight": False,
+            "server_reachable": None,
+            "last_success_unix_sec": None,
+            "last_error": None,
+            "endpoint": "",
+            "prompt": "",
+            "server_metadata": None,
+            "pending_action_count": 0,
+        }
         self.last_record_status = {
             "state": "idle",
             "busy": False,
@@ -71,6 +82,7 @@ class MonitorNode(Node):
         self.control_teleop_cli = self.create_client(SetBool, "/control/set_teleop_active")
         self.control_torque_cli = self.create_client(SetBool, "/control/set_manual_torque")
         self.light_cli = self.create_client(SetBool, "/light_enable")
+        self.policy_config_pub = self.create_publisher(String, "/policy/config", 10)
         self.record_command_pub = self.create_publisher(String, "/record/command", 10)
 
         sensor_qos = QoSProfile(
@@ -100,6 +112,9 @@ class MonitorNode(Node):
             String, "/light/status", self._on_light_status, control_qos,
         )
         self.create_subscription(
+            String, "/policy/status", self._on_policy_status, 10,
+        )
+        self.create_subscription(
             String, "/record/status", self._on_record_status, control_qos,
         )
 
@@ -111,6 +126,7 @@ class MonitorNode(Node):
             "joints": self.last_joints,
             "control": self.last_control_status,
             "light": self.last_light_status,
+            "policy": self.last_policy_status,
             "record": self.last_record_status,
         }
 
@@ -162,6 +178,24 @@ class MonitorNode(Node):
             return
         self.last_light_status = {
             "enabled": bool(payload.get("enabled", False)),
+        }
+        self._notify()
+
+    def _on_policy_status(self, msg: String):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        self.last_policy_status = {
+            "enabled": bool(payload.get("enabled", False)),
+            "request_in_flight": bool(payload.get("request_in_flight", False)),
+            "server_reachable": payload.get("server_reachable"),
+            "last_success_unix_sec": payload.get("last_success_unix_sec"),
+            "last_error": payload.get("last_error"),
+            "endpoint": str(payload.get("endpoint", "")),
+            "prompt": str(payload.get("prompt", "")),
+            "server_metadata": payload.get("server_metadata"),
+            "pending_action_count": int(payload.get("pending_action_count", 0)),
         }
         self._notify()
 
@@ -255,6 +289,18 @@ async def _publish_record_command(request, payload: dict, unavailable_error: str
     msg.data = json.dumps(payload)
     publish_or_ignore_shutdown(publisher, msg)
     return web.json_response({"ok": True})
+
+
+async def _publish_policy_config(request, payload: dict):
+    node = request.app["node"]
+    publisher = node.policy_config_pub
+    if publisher.get_subscription_count() <= 0:
+        return web.json_response({"error": "Policy client is unavailable"}, status=503)
+
+    msg = String()
+    msg.data = json.dumps(payload)
+    publish_or_ignore_shutdown(publisher, msg)
+    return web.json_response({"ok": True, **payload})
 
 
 async def handle_control_policy_enable(request):
@@ -395,6 +441,28 @@ async def handle_record_finish(request):
     )
 
 
+async def handle_policy_config(request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON payload"}, status=400)
+
+    config: dict[str, str] = {}
+    if "endpoint" in payload:
+        endpoint = str(payload.get("endpoint", "")).strip()
+        if not endpoint:
+            return web.json_response({"error": "Policy endpoint must be non-empty"}, status=400)
+        config["endpoint"] = endpoint
+
+    if "prompt" in payload:
+        config["prompt"] = str(payload.get("prompt", ""))
+
+    if not config:
+        return web.json_response({"error": "At least one policy config field is required"}, status=400)
+
+    return await _publish_policy_config(request, config)
+
+
 async def _start_ros(app):
     loop = asyncio.get_running_loop()
     rclpy.init()
@@ -427,6 +495,7 @@ def main():
     app.router.add_post("/api/control/torque/disable", handle_control_torque_disable)
     app.router.add_post("/api/light/enable", handle_light_enable)
     app.router.add_post("/api/light/disable", handle_light_disable)
+    app.router.add_post("/api/policy/config", handle_policy_config)
     app.router.add_post("/api/record/begin-session", handle_record_begin_session)
     app.router.add_post("/api/record/start", handle_record_start)
     app.router.add_post("/api/record/done", handle_record_done)
