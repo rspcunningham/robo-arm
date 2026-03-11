@@ -22,7 +22,9 @@ Install the libcamera Python bindings once on the Pi:
 sudo apt install -y python3-libcamera
 ```
 
-`./scripts/run_pi_stack.sh` uses `ROS_SETUP_BASH` if set. Otherwise it checks `ROS_DISTRO`, then auto-discovers `/opt/ros/*/setup.bash`.
+`./scripts/run_pi_stack.sh` checks `ROS_DISTRO`, then auto-discovers
+`/opt/ros/*/setup.bash`. Runtime defaults for camera and policy are defined
+directly in Python node code.
 
 ## Run manually on the Pi
 
@@ -30,21 +32,22 @@ sudo apt install -y python3-libcamera
 ./scripts/run_pi_stack.sh
 ```
 
-Point the always-on `policy-client` at your Mac policy server with
-`ROBO_ARM_POLICY_URL` when needed:
-
-```bash
-ROBO_ARM_POLICY_URL=http://macbook.local:8000/predict ./scripts/run_pi_stack.sh
-```
-
 Camera topics:
 
 - primary image topic: `/cam0/image_raw`
 - camera calibration/metadata topic: `/cam0/camera_info`
+- compressed image topic: `/cam0/image/compressed`
+- optional CSI image topic: `/cam2/image_raw`
+- optional CSI camera metadata topic: `/cam2/camera_info`
 - ESP32 SPI health topic: `/cam1/spi_health`
 
-`cam0` is a native Python ROS2 node (`nodes/cam0.py`) backed by
+`cam0` is a USB camera ROS2 node (`nodes/cam0.py`) that defaults to
+`/dev/v4l/by-id/usb-MACROSILICON_Guermok_USB2_Video_20250820-video-index0`
+(`MJPG`, `1280x720`, `30 fps`) via OpenCV.
+It also publishes `/cam0/image/compressed` (JPEG; quality configurable).
+`cam2` is the CSI camera ROS2 node (`nodes/cam2.py`) backed by
 `python3-libcamera` and expects the CSI camera stack to be enabled on the Pi.
+It is available for manual runs (`uv run cam2`) but is not started by default.
 
 ## Install as a service on the Pi
 

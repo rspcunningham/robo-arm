@@ -12,6 +12,22 @@ from std_srvs.srv import Trigger
 JOINT_NAMES = ["base", "shoulder", "elbow", "hand"]
 
 
+def joint_positions_from_msg(msg: JointState, joint_names: list[str] | tuple[str, ...] = JOINT_NAMES) -> list[float] | None:
+    """Extract joint positions in canonical order when possible."""
+    if msg.name and len(msg.name) == len(msg.position):
+        positions_by_name = {
+            name: float(position)
+            for name, position in zip(msg.name, msg.position, strict=False)
+        }
+        if all(name in positions_by_name for name in joint_names):
+            return [positions_by_name[name] for name in joint_names]
+
+    if len(msg.position) >= len(joint_names):
+        return [float(value) for value in msg.position[:len(joint_names)]]
+
+    return None
+
+
 def _is_shutdown_publish_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return (not rclpy.ok()) or "context is invalid" in message

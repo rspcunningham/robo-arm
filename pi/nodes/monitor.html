@@ -156,6 +156,84 @@
     margin-top: 4px;
   }
 
+  .form-stack {
+    margin-top: 10px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .form-field {
+    display: grid;
+    gap: 5px;
+  }
+
+  .field-label {
+    color: var(--muted);
+    font: 600 0.63rem/1 "IBM Plex Mono", monospace;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .text-input {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(14, 21, 32, 0.88);
+    color: var(--text);
+    padding: 10px 12px;
+    font: 500 0.86rem/1.2 "IBM Plex Sans", sans-serif;
+  }
+
+  .text-input:disabled {
+    color: var(--muted);
+    background: rgba(14, 21, 32, 0.52);
+  }
+
+  .action-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .action-button {
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    padding: 9px 11px;
+    cursor: pointer;
+    color: var(--text);
+    background: rgba(24, 33, 46, 0.85);
+    font: 600 0.7rem/1 "IBM Plex Mono", monospace;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .action-button.primary {
+    border-color: rgba(72, 199, 116, 0.4);
+    background: rgba(72, 199, 116, 0.14);
+  }
+
+  .action-button.warn {
+    border-color: rgba(227, 179, 65, 0.4);
+    background: rgba(227, 179, 65, 0.12);
+  }
+
+  .action-button.danger {
+    border-color: rgba(239, 100, 97, 0.34);
+    background: rgba(239, 100, 97, 0.1);
+  }
+
+  .action-button:disabled {
+    cursor: wait;
+    color: var(--muted);
+    border-color: rgba(154, 171, 191, 0.25);
+    background: rgba(154, 171, 191, 0.1);
+  }
+
+  .record-meta {
+    color: var(--muted);
+    font: 500 0.74rem/1.5 "IBM Plex Mono", monospace;
+  }
+
   .control-item {
     display: flex;
     justify-content: space-between;
@@ -317,6 +395,10 @@
             <button id="policy-toggle" class="toggle off" type="button" aria-pressed="false">Off</button>
           </div>
           <div class="control-item">
+            <span class="control-label">Teleop</span>
+            <button id="teleop-toggle" class="toggle off" type="button" aria-pressed="false">Off</button>
+          </div>
+          <div class="control-item">
             <span class="control-label">Joint Torque</span>
             <button id="torque-toggle" class="toggle on" type="button" aria-pressed="true">On</button>
           </div>
@@ -324,6 +406,29 @@
             <span class="control-label">Work Light</span>
             <button id="light-toggle" class="toggle off" type="button" aria-pressed="false">Off</button>
           </div>
+        </div>
+      </section>
+
+      <section class="rail-section">
+        <div class="section-title">Recording</div>
+        <div class="form-stack">
+          <label class="form-field">
+            <span class="field-label">Dataset Repo</span>
+            <input id="record-repo" class="text-input" type="text" value="robin/teleop-demos" spellcheck="false">
+          </label>
+          <label class="form-field">
+            <span class="field-label">Task</span>
+            <input id="record-task" class="text-input" type="text" placeholder="pick up block">
+          </label>
+          <div class="action-row">
+            <button id="record-begin" class="action-button" type="button">Begin Session</button>
+            <button id="record-start" class="action-button primary" type="button">Start</button>
+          </div>
+          <div class="action-row">
+            <button id="record-done" class="action-button warn" type="button">Done</button>
+            <button id="record-finish" class="action-button danger" type="button">Finish</button>
+          </div>
+          <div id="record-summary" class="record-meta">No recording session active</div>
         </div>
       </section>
 
@@ -346,8 +451,16 @@ const footerStatus = document.getElementById('footer-status');
 const camStatus = document.getElementById('cam-status');
 const updatedAt = document.getElementById('updated-at');
 const policyToggleBtn = document.getElementById('policy-toggle');
+const teleopToggleBtn = document.getElementById('teleop-toggle');
 const torqueToggleBtn = document.getElementById('torque-toggle');
 const lightToggleBtn = document.getElementById('light-toggle');
+const recordRepoInput = document.getElementById('record-repo');
+const recordTaskInput = document.getElementById('record-task');
+const recordBeginBtn = document.getElementById('record-begin');
+const recordStartBtn = document.getElementById('record-start');
+const recordDoneBtn = document.getElementById('record-done');
+const recordFinishBtn = document.getElementById('record-finish');
+const recordSummary = document.getElementById('record-summary');
 
 JOINTS.forEach(name => {
   const row = jointTable.insertRow();
@@ -359,10 +472,13 @@ let prevUrl = null;
 let lastFrameAt = 0;
 let lastEvent = 0;
 let policyBusy = false;
+let teleopBusy = false;
 let torqueBusy = false;
 let lightBusy = false;
+let recordBusy = false;
 let latestControl = null;
 let latestLight = null;
+let latestRecord = null;
 
 function setConnectionState(label, className, footer) {
   statusPill.textContent = label;
@@ -374,6 +490,24 @@ function getControl() {
   return latestControl || {
     mode: 'idle',
     torque_enabled: true,
+  };
+}
+
+function getRecord() {
+  return latestRecord || {
+    state: 'idle',
+    busy: false,
+    busy_action: null,
+    status_message: 'Idle',
+    session_active: false,
+    episode_active: false,
+    task: '',
+    repo_id: '',
+    fps: null,
+    episodes_saved: 0,
+    current_episode_frames: 0,
+    teleop_ready: false,
+    last_error: null,
   };
 }
 
@@ -402,8 +536,12 @@ function refreshControlToggles() {
   const mode = control.mode;
 
   const policyEnabled = mode === 'policy';
-  const policyLocked = mode === 'record' || mode === 'replay';
+  const policyLocked = mode === 'record' || mode === 'replay' || mode === 'teleop';
   setToggleButton(policyToggleBtn, policyEnabled, policyBusy, policyLocked);
+
+  const teleopEnabled = mode === 'teleop';
+  const teleopLocked = mode === 'record' || mode === 'replay' || mode === 'policy';
+  setToggleButton(teleopToggleBtn, teleopEnabled, teleopBusy, teleopLocked);
 
   const torqueEnabled = !!control.torque_enabled;
   const torqueLocked = mode !== 'idle';
@@ -413,6 +551,45 @@ function refreshControlToggles() {
 function refreshLightToggle() {
   const lightEnabled = latestLight?.enabled ?? false;
   setToggleButton(lightToggleBtn, lightEnabled, lightBusy, false);
+}
+
+function refreshRecordUi() {
+  const record = getRecord();
+  const sessionActive = !!record.session_active;
+  const episodeActive = !!record.episode_active;
+  const ready = record.state === 'ready';
+  const busy = recordBusy || !!record.busy;
+
+  recordRepoInput.disabled = sessionActive || busy;
+  recordTaskInput.disabled = sessionActive || busy;
+
+  recordBeginBtn.disabled = sessionActive || busy;
+  recordStartBtn.disabled = !ready || busy;
+  recordDoneBtn.disabled = !episodeActive || busy;
+  recordFinishBtn.disabled = !sessionActive || episodeActive || busy;
+
+  recordBeginBtn.textContent = record.state === 'opening' ? 'Opening' : 'Begin Session';
+  recordStartBtn.textContent = record.state === 'recording' ? 'Recording' : 'Start';
+  recordDoneBtn.textContent = record.state === 'saving' ? 'Saving' : 'Done';
+  recordFinishBtn.textContent = record.state === 'finalizing' ? 'Finalizing' : 'Finish';
+
+  const lines = [];
+  lines.push(record.status_message || `State: ${record.state}`);
+  if (sessionActive) {
+    lines.push(`Repo: ${record.repo_id}`);
+    lines.push(`Task: ${record.task}`);
+    lines.push(`Episodes saved: ${record.episodes_saved}`);
+    if (episodeActive || record.current_episode_frames > 0) {
+      lines.push(`Episode frames: ${record.current_episode_frames}`);
+    }
+    lines.push(record.teleop_ready ? 'Teleop ready' : 'Teleop not ready');
+  } else {
+    lines.push('No recording session active');
+  }
+  if (record.last_error) {
+    lines.push(`Error: ${record.last_error}`);
+  }
+  recordSummary.textContent = lines.join(' · ');
 }
 
 async function setPolicyEnabled(enabled) {
@@ -453,6 +630,25 @@ async function setTorqueEnabled(enabled) {
   }
 }
 
+async function setTeleopEnabled(enabled) {
+  teleopBusy = true;
+  refreshControlToggles();
+  try {
+    const response = await fetch(enabled ? '/api/control/teleop/enable' : '/api/control/teleop/disable', {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    footerStatus.textContent = `Teleop toggle failed: ${error.message}`;
+  } finally {
+    teleopBusy = false;
+    refreshControlToggles();
+  }
+}
+
 async function setLightEnabled(enabled) {
   lightBusy = true;
   refreshLightToggle();
@@ -472,9 +668,35 @@ async function setLightEnabled(enabled) {
   }
 }
 
+async function sendRecordCommand(path, payload) {
+  recordBusy = true;
+  refreshRecordUi();
+  try {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: payload ? { 'Content-Type': 'application/json' } : undefined,
+      body: payload ? JSON.stringify(payload) : undefined,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    footerStatus.textContent = `Record command failed: ${error.message}`;
+  } finally {
+    recordBusy = false;
+    refreshRecordUi();
+  }
+}
+
 policyToggleBtn.addEventListener('click', () => {
   const policyEnabled = getControl().mode === 'policy';
   setPolicyEnabled(!policyEnabled);
+});
+
+teleopToggleBtn.addEventListener('click', () => {
+  const teleopEnabled = getControl().mode === 'teleop';
+  setTeleopEnabled(!teleopEnabled);
 });
 
 torqueToggleBtn.addEventListener('click', () => {
@@ -485,6 +707,27 @@ torqueToggleBtn.addEventListener('click', () => {
 lightToggleBtn.addEventListener('click', () => {
   const lightEnabled = latestLight?.enabled ?? false;
   setLightEnabled(!lightEnabled);
+});
+
+recordBeginBtn.addEventListener('click', () => {
+  sendRecordCommand('/api/record/begin-session', {
+    repo_id: recordRepoInput.value.trim(),
+    task: recordTaskInput.value.trim(),
+    fps: 10,
+    public: false,
+  });
+});
+
+recordStartBtn.addEventListener('click', () => {
+  sendRecordCommand('/api/record/start');
+});
+
+recordDoneBtn.addEventListener('click', () => {
+  sendRecordCommand('/api/record/done');
+});
+
+recordFinishBtn.addEventListener('click', () => {
+  sendRecordCommand('/api/record/finish');
 });
 
 function refreshDerivedState() {
@@ -505,6 +748,7 @@ function refreshDerivedState() {
 
   refreshControlToggles();
   refreshLightToggle();
+  refreshRecordUi();
 }
 
 async function streamVideo() {
@@ -558,6 +802,7 @@ es.onmessage = event => {
 
   latestControl = data.control || latestControl;
   latestLight = data.light || latestLight;
+  latestRecord = data.record || latestRecord;
 
   refreshDerivedState();
 };

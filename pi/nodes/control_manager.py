@@ -1,4 +1,4 @@
-"""Coordinate high-level control modes for policy, record, replay, and idle."""
+"""Coordinate high-level control modes for policy, teleop, record, replay, and idle."""
 
 import json
 
@@ -27,6 +27,7 @@ class ControlManagerNode(Node):
         self.torque_enable_cli = self.create_client(SetBool, "/torque_enable")
 
         self.create_service(SetBool, "/control/set_policy_active", self._srv_set_policy_active)
+        self.create_service(SetBool, "/control/set_teleop_active", self._srv_set_teleop_active)
         self.create_service(SetBool, "/control/set_manual_torque", self._srv_set_manual_torque)
         self.create_service(Trigger, "/control/enter_record_mode", self._srv_enter_record_mode)
         self.create_service(Trigger, "/control/exit_record_mode", self._srv_exit_record_mode)
@@ -57,7 +58,7 @@ class ControlManagerNode(Node):
     def _desired_torque_enabled(self) -> bool:
         if self._mode == "record":
             return False
-        if self._mode in {"policy", "replay"}:
+        if self._mode in {"policy", "teleop", "replay"}:
             return True
         return self._manual_torque_enabled
 
@@ -76,6 +77,7 @@ class ControlManagerNode(Node):
             "mode": self._mode,
             "manual_torque_enabled": self._manual_torque_enabled,
             "policy_enabled": desired_policy,
+            "teleop_enabled": self._mode == "teleop",
             "torque_enabled": desired_torque,
             "policy_request_in_flight": self._policy_request_in_flight,
             "torque_request_in_flight": self._torque_request_in_flight,
@@ -203,6 +205,32 @@ class ControlManagerNode(Node):
         state = "enabled" if req.data else "disabled"
         resp.success = True
         resp.message = f"Manual torque {state}"
+        return resp
+
+    def _srv_set_teleop_active(self, req, resp):
+        if req.data:
+            if self._mode not in {"idle", "teleop"}:
+                resp.success = False
+                resp.message = self._service_busy_message()
+                return resp
+            self._set_mode("teleop")
+            resp.success = True
+            resp.message = "Teleop mode enabled"
+            return resp
+
+        if self._mode == "teleop":
+            self._set_mode("idle")
+            resp.success = True
+            resp.message = "Returned to idle mode"
+            return resp
+
+        if self._mode == "idle":
+            resp.success = True
+            resp.message = "Already idle"
+            return resp
+
+        resp.success = False
+        resp.message = self._service_busy_message()
         return resp
 
     def _srv_enter_record_mode(self, req, resp):

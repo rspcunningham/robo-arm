@@ -16,19 +16,21 @@ import rclpy
 from aiohttp import web
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image as RosImage, JointState
+from sensor_msgs.msg import CompressedImage, Image as RosImage, JointState
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
 from nodes._image import ros_image_to_jpeg_bytes
 from nodes._util import (
     JOINT_NAMES,
+    publish_or_ignore_shutdown,
     shutdown_background_node,
     spin_in_background,
     wait_for_future,
 )
 
 IMAGE_TOPIC = "/cam0/image_raw"
+COMPRESSED_IMAGE_TOPIC = "/cam0/image/compressed"
 
 HTML_TEMPLATE = (Path(__file__).with_name("monitor.html")).read_text(encoding="utf-8")
 HTML_PAGE = HTML_TEMPLATE.replace("%JOINTS%", json.dumps(JOINT_NAMES))
@@ -44,14 +46,32 @@ class MonitorNode(Node):
         self.last_joints: dict | None = None
         self.last_control_status = {
             "mode": "idle",
+            "teleop_enabled": False,
             "torque_enabled": True,
         }
         self.last_light_status = {
             "enabled": False,
         }
+        self.last_record_status = {
+            "state": "idle",
+            "busy": False,
+            "busy_action": None,
+            "status_message": "Idle",
+            "session_active": False,
+            "episode_active": False,
+            "task": "",
+            "repo_id": "",
+            "fps": None,
+            "episodes_saved": 0,
+            "current_episode_frames": 0,
+            "teleop_ready": False,
+            "last_error": None,
+        }
         self.control_policy_cli = self.create_client(SetBool, "/control/set_policy_active")
+        self.control_teleop_cli = self.create_client(SetBool, "/control/set_teleop_active")
         self.control_torque_cli = self.create_client(SetBool, "/control/set_manual_torque")
         self.light_cli = self.create_client(SetBool, "/light_enable")
+        self.record_command_pub = self.create_publisher(String, "/record/command", 10)
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -65,6 +85,9 @@ class MonitorNode(Node):
             depth=1,
         )
         self.create_subscription(
+            CompressedImage, COMPRESSED_IMAGE_TOPIC, self._on_compressed_image, sensor_qos,
+        )
+        self.create_subscription(
             RosImage, IMAGE_TOPIC, self._on_image, sensor_qos,
         )
         self.create_subscription(
@@ -76,6 +99,9 @@ class MonitorNode(Node):
         self.create_subscription(
             String, "/light/status", self._on_light_status, control_qos,
         )
+        self.create_subscription(
+            String, "/record/status", self._on_record_status, control_qos,
+        )
 
     def _notify(self):
         self._loop.call_soon_threadsafe(self.state_event.set)
@@ -85,7 +111,20 @@ class MonitorNode(Node):
             "joints": self.last_joints,
             "control": self.last_control_status,
             "light": self.last_light_status,
+            "record": self.last_record_status,
         }
+
+    def _on_compressed_image(self, msg: CompressedImage):
+        fmt = (msg.format or "").lower()
+        if "jpeg" not in fmt and "jpg" not in fmt:
+            now = self.get_clock().now().nanoseconds / 1e9
+            if now - self._last_image_warning_monotonic >= 5.0:
+                self._last_image_warning_monotonic = now
+                self.get_logger().warning(
+                    f"Dropping unsupported compressed camera frame format: {msg.format!r}"
+                )
+            return
+        self.last_jpeg = bytes(msg.data)
 
     def _on_image(self, msg: RosImage):
         try:
@@ -111,6 +150,7 @@ class MonitorNode(Node):
             return
         self.last_control_status = {
             "mode": payload.get("mode", "idle"),
+            "teleop_enabled": bool(payload.get("teleop_enabled", False)),
             "torque_enabled": bool(payload.get("torque_enabled", True)),
         }
         self._notify()
@@ -122,6 +162,28 @@ class MonitorNode(Node):
             return
         self.last_light_status = {
             "enabled": bool(payload.get("enabled", False)),
+        }
+        self._notify()
+
+    def _on_record_status(self, msg: String):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        self.last_record_status = {
+            "state": payload.get("state", "idle"),
+            "busy": bool(payload.get("busy", False)),
+            "busy_action": payload.get("busy_action"),
+            "status_message": payload.get("status_message", "Idle"),
+            "session_active": bool(payload.get("session_active", False)),
+            "episode_active": bool(payload.get("episode_active", False)),
+            "task": payload.get("task", ""),
+            "repo_id": payload.get("repo_id", ""),
+            "fps": payload.get("fps"),
+            "episodes_saved": int(payload.get("episodes_saved", 0)),
+            "current_episode_frames": int(payload.get("current_episode_frames", 0)),
+            "teleop_ready": bool(payload.get("teleop_ready", False)),
+            "last_error": payload.get("last_error"),
         }
         self._notify()
 
@@ -183,6 +245,18 @@ async def _set_service_bool(request, client_attr: str, enabled: bool, unavailabl
     return web.json_response({"ok": True, "enabled": enabled})
 
 
+async def _publish_record_command(request, payload: dict, unavailable_error: str):
+    node = request.app["node"]
+    publisher = node.record_command_pub
+    if publisher.get_subscription_count() <= 0:
+        return web.json_response({"error": unavailable_error}, status=503)
+
+    msg = String()
+    msg.data = json.dumps(payload)
+    publish_or_ignore_shutdown(publisher, msg)
+    return web.json_response({"ok": True})
+
+
 async def handle_control_policy_enable(request):
     return await _set_service_bool(
         request,
@@ -200,6 +274,26 @@ async def handle_control_policy_disable(request):
         False,
         "Control manager policy service unavailable",
         "Policy toggle failed",
+    )
+
+
+async def handle_control_teleop_enable(request):
+    return await _set_service_bool(
+        request,
+        "control_teleop_cli",
+        True,
+        "Control manager teleop service unavailable",
+        "Teleop toggle failed",
+    )
+
+
+async def handle_control_teleop_disable(request):
+    return await _set_service_bool(
+        request,
+        "control_teleop_cli",
+        False,
+        "Control manager teleop service unavailable",
+        "Teleop toggle failed",
     )
 
 
@@ -243,6 +337,64 @@ async def handle_light_disable(request):
     )
 
 
+async def handle_record_begin_session(request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON payload"}, status=400)
+
+    repo_id = str(payload.get("repo_id", "")).strip()
+    task = str(payload.get("task", "")).strip()
+    try:
+        fps = int(payload.get("fps", 10))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "FPS must be a valid integer"}, status=400)
+    public = bool(payload.get("public", False))
+
+    if not repo_id:
+        return web.json_response({"error": "Repository id is required"}, status=400)
+    if not task:
+        return web.json_response({"error": "Task is required"}, status=400)
+    if fps <= 0:
+        return web.json_response({"error": "FPS must be positive"}, status=400)
+
+    return await _publish_record_command(
+        request,
+        {
+            "action": "begin_session",
+            "repo_id": repo_id,
+            "task": task,
+            "fps": fps,
+            "public": public,
+        },
+        "Record manager is unavailable",
+    )
+
+
+async def handle_record_start(request):
+    return await _publish_record_command(
+        request,
+        {"action": "start"},
+        "Record manager is unavailable",
+    )
+
+
+async def handle_record_done(request):
+    return await _publish_record_command(
+        request,
+        {"action": "done"},
+        "Record manager is unavailable",
+    )
+
+
+async def handle_record_finish(request):
+    return await _publish_record_command(
+        request,
+        {"action": "finish"},
+        "Record manager is unavailable",
+    )
+
+
 async def _start_ros(app):
     loop = asyncio.get_running_loop()
     rclpy.init()
@@ -269,10 +421,16 @@ def main():
     app.router.add_get("/events", handle_events)
     app.router.add_post("/api/control/policy/enable", handle_control_policy_enable)
     app.router.add_post("/api/control/policy/disable", handle_control_policy_disable)
+    app.router.add_post("/api/control/teleop/enable", handle_control_teleop_enable)
+    app.router.add_post("/api/control/teleop/disable", handle_control_teleop_disable)
     app.router.add_post("/api/control/torque/enable", handle_control_torque_enable)
     app.router.add_post("/api/control/torque/disable", handle_control_torque_disable)
     app.router.add_post("/api/light/enable", handle_light_enable)
     app.router.add_post("/api/light/disable", handle_light_disable)
+    app.router.add_post("/api/record/begin-session", handle_record_begin_session)
+    app.router.add_post("/api/record/start", handle_record_start)
+    app.router.add_post("/api/record/done", handle_record_done)
+    app.router.add_post("/api/record/finish", handle_record_finish)
 
     web.run_app(
         app,

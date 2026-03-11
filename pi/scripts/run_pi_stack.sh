@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROBO_ARM_MONITOR_PORT="${ROBO_ARM_MONITOR_PORT:-8080}"
-ROBO_ARM_POLICY_URL="${ROBO_ARM_POLICY_URL:-http://127.0.0.1:8000/predict}"
-ROBO_ARM_POLICY_RATE_HZ="${ROBO_ARM_POLICY_RATE_HZ:-5}"
-ROBO_ARM_POLICY_TIMEOUT_SEC="${ROBO_ARM_POLICY_TIMEOUT_SEC:-1}"
-ROS_SETUP_BASH="${ROS_SETUP_BASH:-}"
-CLEANUP_TIMEOUT_SEC="${CLEANUP_TIMEOUT_SEC:-2}"
+CLEANUP_TIMEOUT_SEC=2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROS_SETUP_BASH=""
 
 if [[ -z "${ROS_SETUP_BASH}" ]]; then
   if [[ -n "${ROS_DISTRO:-}" && -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]]; then
@@ -39,8 +35,10 @@ set -u
 
 cd "${PROJECT_ROOT}"
 VENV_BIN="${PROJECT_ROOT}/.venv/bin"
+FOLLOWER_ARM_DEVICE="/dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_acff0192339bef11b2e7b69061ce3355-if00-port0"
+LEADER_ARM_DEVICE="/dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_24ee9dd6f400f0119b83c3295c2a50c9-if00-port0"
 
-if [[ ! -x "${VENV_BIN}/arm" || ! -x "${VENV_BIN}/cam0" || ! -x "${VENV_BIN}/control-manager" || ! -x "${VENV_BIN}/policy-client" || ! -x "${VENV_BIN}/monitor" ]]; then
+if [[ ! -x "${VENV_BIN}/arm" || ! -x "${VENV_BIN}/cam0" || ! -x "${VENV_BIN}/control-manager" || ! -x "${VENV_BIN}/policy-client" || ! -x "${VENV_BIN}/teleop" || ! -x "${VENV_BIN}/record-manager" || ! -x "${VENV_BIN}/monitor" ]]; then
   echo "[err] Missing venv entrypoints under ${VENV_BIN}. Run 'uv sync --project pi' first." >&2
   exit 1
 fi
@@ -85,7 +83,25 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-"${VENV_BIN}/arm" &
+"${VENV_BIN}/arm" \
+  --ros-args \
+  -r __node:=follower_arm \
+  -p label:=follower \
+  -p "serial_device:=${FOLLOWER_ARM_DEVICE}" &
+pids+=("$!")
+
+"${VENV_BIN}/arm" \
+  --ros-args \
+  -r __node:=leader_arm \
+  -p label:=leader \
+  -p "serial_device:=${LEADER_ARM_DEVICE}" \
+  -p interface_namespace:=/leader &
+pids+=("$!")
+
+"${VENV_BIN}/teleop" &
+pids+=("$!")
+
+"${VENV_BIN}/record-manager" &
 pids+=("$!")
 
 "${VENV_BIN}/cam0" &
@@ -94,13 +110,10 @@ pids+=("$!")
 "${VENV_BIN}/control-manager" &
 pids+=("$!")
 
-"${VENV_BIN}/policy-client" \
-  --url "${ROBO_ARM_POLICY_URL}" \
-  --rate-hz "${ROBO_ARM_POLICY_RATE_HZ}" \
-  --timeout-sec "${ROBO_ARM_POLICY_TIMEOUT_SEC}" &
+"${VENV_BIN}/policy-client" &
 pids+=("$!")
 
-"${VENV_BIN}/monitor" --port "${ROBO_ARM_MONITOR_PORT}" &
+"${VENV_BIN}/monitor" &
 pids+=("$!")
 
 wait -n "${pids[@]}"

@@ -12,21 +12,24 @@ import urllib.request
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image, JointState
+from sensor_msgs.msg import CompressedImage, Image, JointState
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
 from nodes._image import ros_image_to_jpeg_bytes
 from nodes._util import (
     JOINT_NAMES,
+    joint_positions_from_msg,
     publish_or_ignore_shutdown,
     run_node,
 )
 
-DEFAULT_POLICY_URL = "http://127.0.0.1:8000/predict"
+DEFAULT_POLICY_URL = "http://Robins-MacBook-Pro.local:8000/predict"
 MAX_RATE_HZ = 50.0
+DEFAULT_RATE_HZ = 5.0
 DEFAULT_TIMEOUT_SEC = 1.0
 IMAGE_TOPIC = "/cam0/image_raw"
+COMPRESSED_IMAGE_TOPIC = "/cam0/image/compressed"
 WARNING_INTERVAL_SEC = 5.0
 
 
@@ -46,7 +49,10 @@ class PolicyClientNode(Node):
         self.status_pub = self.create_publisher(String, "/policy/status", 10)
         self.create_service(SetBool, "/policy_enable", self._srv_enable)
         self.create_subscription(
-            Image, IMAGE_TOPIC, self._on_image, sensor_qos,
+            CompressedImage, COMPRESSED_IMAGE_TOPIC, self._on_compressed_image, sensor_qos,
+        )
+        self.create_subscription(
+            Image, IMAGE_TOPIC, self._on_raw_image, sensor_qos,
         )
         self.create_subscription(
             JointState, "/joint_states", self._on_joints, 10,
@@ -71,7 +77,21 @@ class PolicyClientNode(Node):
 
         self.get_logger().info(f"Policy client ready ({self.policy_url})")
 
-    def _on_image(self, msg: Image):
+    def _on_compressed_image(self, msg: CompressedImage):
+        fmt = (msg.format or "").lower()
+        if "jpeg" not in fmt and "jpg" not in fmt:
+            now = time.monotonic()
+            if now - self._last_image_warning_monotonic >= WARNING_INTERVAL_SEC:
+                self._last_image_warning_monotonic = now
+                self.get_logger().warning(
+                    f"Dropping unsupported compressed frame format: {msg.format!r}"
+                )
+            return
+
+        with self._state_lock:
+            self._last_frame = bytes(msg.data)
+
+    def _on_raw_image(self, msg: Image):
         try:
             frame = ros_image_to_jpeg_bytes(msg, quality=85)
         except ValueError as exc:
@@ -85,19 +105,7 @@ class PolicyClientNode(Node):
             self._last_frame = frame
 
     def _on_joints(self, msg: JointState):
-        joints: list[float] | None = None
-
-        if msg.name and len(msg.name) == len(msg.position):
-            positions_by_name = {
-                name: float(position)
-                for name, position in zip(msg.name, msg.position, strict=False)
-            }
-            if all(name in positions_by_name for name in JOINT_NAMES):
-                joints = [positions_by_name[name] for name in JOINT_NAMES]
-
-        if joints is None and len(msg.position) >= len(JOINT_NAMES):
-            joints = [float(value) for value in msg.position[:len(JOINT_NAMES)]]
-
+        joints = joint_positions_from_msg(msg)
         if joints is None:
             now = time.monotonic()
             if now - self._last_joints_warning_monotonic >= WARNING_INTERVAL_SEC:
@@ -243,8 +251,8 @@ def main():
     parser.add_argument(
         "--rate-hz",
         type=float,
-        default=MAX_RATE_HZ,
-        help=f"Policy polling rate in Hz (default: {MAX_RATE_HZ})",
+        default=DEFAULT_RATE_HZ,
+        help=f"Policy polling rate in Hz (default: {DEFAULT_RATE_HZ})",
     )
     parser.add_argument(
         "--timeout-sec",
