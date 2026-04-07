@@ -5,7 +5,6 @@ Minimal direct-control Python package for the RoArm-M2-S.
 ## What remains
 
 - `src/roarm/arm.py`: serial JSON interface to the arm firmware
-- `src/roarm/config.py`: joint naming and firmware/user frame transforms
 - `src/roarm/__init__.py`: package exports
 
 ## Install

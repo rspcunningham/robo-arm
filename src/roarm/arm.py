@@ -8,18 +8,13 @@ from dataclasses import dataclass
 
 import serial
 
-from roarm.config import (
-    JOINT_NAMES,
-    SERIAL_BAUDRATE,
-    SERIAL_TIMEOUT,
-    firmware_to_user,
-    user_to_firmware,
-)
+SERIAL_BAUDRATE = 115200
+SERIAL_TIMEOUT = 0.05  # seconds
 
 
 @dataclass
 class ArmState:
-    position: tuple[float, ...]     # radians, user frame
+    position: tuple[float, ...]     # radians, firmware frame
     load: tuple[float, ...]         # raw torque values from firmware
     timestamp: float                # time.monotonic()
 
@@ -60,9 +55,8 @@ class Arm:
         data = self._read_response()
         if data is None or data.get("T") != 1051:
             return None
-        fw_pos = (data["b"], data["s"], data["e"], data["t"])
         return ArmState(
-            position=firmware_to_user(fw_pos),
+            position=(data["b"], data["s"], data["e"], data["t"]),
             load=(
                 float(data.get("torB", 0)),
                 float(data.get("torS", 0)),
@@ -78,14 +72,13 @@ class Arm:
         speed: float = 0.0,
         acceleration: float = 0.0,
     ):
-        """Command all joints. Position in user radians."""
-        fw = user_to_firmware(position)
+        """Command all joints using firmware radians."""
         self._send({
             "T": 102,
-            "base": fw[0],
-            "shoulder": fw[1],
-            "elbow": fw[2],
-            "hand": fw[3],
+            "base": position[0],
+            "shoulder": position[1],
+            "elbow": position[2],
+            "hand": position[3],
             "spd": speed,
             "acc": acceleration,
         })
