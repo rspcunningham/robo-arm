@@ -26,10 +26,24 @@ with Arm("/dev/tty.usbserial-0001") as arm:
 ## Dual-arm discovery
 
 ```bash
-uv run roarm
+uv run roarm status
 ```
 
 This resolves:
 
 - `acff0192339bef11b2e7b69061ce3355` as `left`
 - `24ee9dd6f400f0119b83c3295c2a50c9` as `right`
+
+Torque controls:
+
+```bash
+uv run roarm lock
+uv run roarm unlock
+```
+
+Watch positions:
+
+```bash
+uv run roarm watch
+uv run roarm watch --rate-hz 10
+```
