@@ -7,3 +7,4 @@ MUJOCO_LOG.TXT
 
 checkpoints
 data
+uv.lock

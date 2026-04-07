@@ -22,3 +22,14 @@ with Arm("/dev/tty.usbserial-0001") as arm:
     state = arm.read_state()
     arm.move((0.0, 0.0, 0.0, 0.0))
 ```
+
+## Dual-arm discovery
+
+```bash
+uv run roarm
+```
+
+This resolves:
+
+- `acff0192339bef11b2e7b69061ce3355` as `left`
+- `24ee9dd6f400f0119b83c3295c2a50c9` as `right`
